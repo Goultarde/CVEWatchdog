@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ApiUrl = "http://localhost:8001",
     [switch]$Wildcards,
     [switch]$DebugMatching
@@ -11,6 +11,15 @@ $CVSS_LEVELS = @{
     "High"     = 7.0
     "Medium"   = 4.0
     "Low"      = 0.1
+}
+
+function Get-ServiceExecutablePath {
+    param([string]$PathName)
+
+    if ($PathName -match '^\s*"?(.+?\.exe)"?(?:\s|$)') {
+        return [Environment]::ExpandEnvironmentVariables($Matches[1])
+    }
+    return $null
 }
 
 function Get-InstalledSoftware {
@@ -30,6 +39,30 @@ function Get-InstalledSoftware {
             Name    = $item.DisplayName
             Version = $item.DisplayVersion
             Context = "$($item.Publisher) $($item.URLInfoAbout)"
+        }
+    }
+
+    $windowsPath = [Environment]::ExpandEnvironmentVariables("%SystemRoot%")
+    foreach ($service in Get-CimInstance Win32_Service -ErrorAction SilentlyContinue) {
+        $executable = Get-ServiceExecutablePath $service.PathName
+        if (-not $executable) { continue }
+        if ($executable.StartsWith($windowsPath, [StringComparison]::OrdinalIgnoreCase)) {
+            $ignored++
+            continue
+        }
+
+        try {
+            $versionInfo = (Get-Item -LiteralPath $executable -ErrorAction Stop).VersionInfo
+        }
+        catch {
+            continue
+        }
+        if (-not $versionInfo.ProductName -or -not $versionInfo.ProductVersion) { continue }
+
+        $software += [PSCustomObject]@{
+            Name    = $versionInfo.ProductName
+            Version = $versionInfo.ProductVersion
+            Context = "$($versionInfo.CompanyName) $($versionInfo.FileDescription) $executable"
         }
     }
 
@@ -59,7 +92,7 @@ function Resolve-Software {
         return Invoke-RestMethod `
             -Uri "$($ApiUrl.TrimEnd('/'))/api/resolve" `
             -Method Post `
-            -ContentType "application/json" `
+            -ContentType "application/json; charset=utf-8" `
             -Body $body `
             -TimeoutSec 10
     }
@@ -192,11 +225,11 @@ Write-Host "               SUMMARY"
 Write-Host "═════════════════════════════════════════`n"
 
 $totalCVEs = $allCVEs.Count
-$criticalCount = ($allCVEs | Where-Object { (Get-CVSSSeverity -Score $_.cvss_score) -eq "Critical" }).Count
-$highCount     = ($allCVEs | Where-Object { (Get-CVSSSeverity -Score $_.cvss_score) -eq "High" }).Count
-$mediumCount   = ($allCVEs | Where-Object { (Get-CVSSSeverity -Score $_.cvss_score) -eq "Medium" }).Count
-$lowCount      = ($allCVEs | Where-Object { (Get-CVSSSeverity -Score $_.cvss_score) -eq "Low" }).Count
-$unknownCount  = ($allCVEs | Where-Object { (Get-CVSSSeverity -Score $_.cvss_score) -eq "Unknown" }).Count
+$criticalCount = @($allCVEs | Where-Object { (Get-CVSSSeverity -Score $_.cvss_score) -eq "Critical" }).Count
+$highCount     = @($allCVEs | Where-Object { (Get-CVSSSeverity -Score $_.cvss_score) -eq "High" }).Count
+$mediumCount   = @($allCVEs | Where-Object { (Get-CVSSSeverity -Score $_.cvss_score) -eq "Medium" }).Count
+$lowCount      = @($allCVEs | Where-Object { (Get-CVSSSeverity -Score $_.cvss_score) -eq "Low" }).Count
+$unknownCount  = @($allCVEs | Where-Object { (Get-CVSSSeverity -Score $_.cvss_score) -eq "Unknown" }).Count
 
 Write-Host "Software scanned        : $($software.Count)"
 Write-Host "Software ignored        : $ignoredCount"
