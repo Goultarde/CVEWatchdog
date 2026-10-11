@@ -1,7 +1,9 @@
 import argparse
+import html
 import os
 import subprocess
 import sys
+from pathlib import Path
 import requests
 
 CVSS_LEVELS = {
@@ -187,6 +189,62 @@ def format_cve_table(cves):
         print(f"{cve.get('cve_id', ''):<20} {severity_color}{severity:<12}{Colors.RESET} "
               f"{cvss_str:<8} {cve.get('version', ''):<15} {published:<12} {description:<50}")
 
+def write_html_report(path, software_with_cves, summary):
+    """Write a standalone, escaped HTML vulnerability report."""
+    sections = []
+    for app in software_with_cves:
+        rows = []
+        for cve in app["cves"]:
+            severity = get_cvss_severity(cve.get("cvss_score"))
+            score = cve.get("cvss_score")
+            rows.append(
+                f'<tr><td>{html.escape(str(cve.get("cve_id", "")))}</td>'
+                f'<td><span class="severity {severity.lower()}">{severity}</span></td>'
+                f'<td>{html.escape(str(score if score is not None else "N/A"))}</td>'
+                f'<td>{html.escape(str(cve.get("version", "")))}</td>'
+                f'<td>{html.escape(str(cve.get("published", "")).split("T")[0])}</td>'
+                f'<td>{html.escape(str(cve.get("description", "")))}</td></tr>'
+            )
+        sections.append(
+            f'<section><h2>{html.escape(app["name"])} '
+            f'<small>{html.escape(app["version"])}</small></h2>'
+            f'<p class="cpe">{html.escape(app["cpe"])}</p>'
+            '<div class="table-wrap"><table><thead><tr><th>CVE</th><th>Severity</th>'
+            '<th>CVSS</th><th>Affected version</th><th>Published</th><th>Description</th>'
+            f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div></section>'
+        )
+
+    cards = "".join(
+        f'<div class="card"><strong>{html.escape(label)}</strong><span>{value}</span></div>'
+        for label, value in (
+            ("Software scanned", summary["software_scanned"]),
+            ("Software resolved", summary["software_resolved"]),
+            ("Total CVEs", summary["total_cves"]),
+            ("Critical", summary["critical"]),
+            ("High", summary["high"]),
+            ("Medium", summary["medium"]),
+            ("Low", summary["low"]),
+            ("API errors", summary["api_errors"]),
+        )
+    )
+    document = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CVEWatchdog report</title><style>
+:root{{--bg:#0b1020;--panel:#151c30;--text:#e8edf7;--muted:#9da9bd;--border:#2a3550}}
+*{{box-sizing:border-box}} body{{margin:0;background:var(--bg);color:var(--text);font:14px system-ui,sans-serif}}
+main{{max-width:1400px;margin:auto;padding:32px}} h1{{margin-bottom:4px}} h2{{margin-top:0}} small,.cpe{{color:var(--muted)}}
+.risk{{font-size:18px;font-weight:700}} .cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:24px 0}}
+.card,section{{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}} .card span{{display:block;font-size:24px;margin-top:8px}}
+section{{margin:16px 0}} .table-wrap{{overflow:auto}} table{{width:100%;border-collapse:collapse}} th,td{{padding:9px;text-align:left;border-top:1px solid var(--border);vertical-align:top}}
+.severity{{font-weight:700}} .critical{{color:#ff5c7a}} .high{{color:#ff8c69}} .medium{{color:#ffd166}} .low{{color:#72d6a0}} .unknown{{color:var(--muted)}}
+</style></head><body><main><h1>CVEWatchdog report</h1><p class="risk">{html.escape(summary["risk_level"])}</p>
+<div class="cards">{cards}</div>{"".join(sections) or '<section><h2>No version-confirmed vulnerabilities found</h2></section>'}
+</main></body></html>"""
+    report_path = Path(path).expanduser()
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(document, encoding="utf-8")
+    return report_path.resolve()
+
 def main():
     parser = argparse.ArgumentParser(description='CVEWatchdog - Linux Vulnerability Scanner')
     parser.add_argument(
@@ -197,6 +255,7 @@ def main():
     )
     parser.add_argument('--wildcards', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--debug', action='store_true', help='Enable debug output for matching')
+    parser.add_argument('--html-report', metavar='PATH', help='Write a standalone HTML report')
     
     args = parser.parse_args()
     
@@ -318,6 +377,25 @@ def main():
     
     print(f"Overall Risk Assessment : {risk_color}{risk_level}{Colors.RESET}")
     print()
+
+    if args.html_report:
+        summary = {
+            "software_scanned": len(software_list),
+            "software_resolved": api_matches,
+            "api_errors": api_errors,
+            "total_cves": total_cves,
+            "critical": critical_count,
+            "high": high_count,
+            "medium": medium_count,
+            "low": low_count,
+            "risk_level": risk_level,
+        }
+        try:
+            report_path = write_html_report(args.html_report, software_with_cves, summary)
+        except OSError as error:
+            print(f"{Colors.RED}❌ Cannot write HTML report: {error}{Colors.RESET}")
+            sys.exit(1)
+        print(f"{Colors.GREEN}✅ HTML report written to {report_path}{Colors.RESET}")
 
 if __name__ == "__main__":
     main()

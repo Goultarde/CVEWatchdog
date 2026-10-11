@@ -10,6 +10,7 @@
 - **Detailed CVE reports** with CVSS scores and severity levels
 - **Explicit unresolved/API-error reporting** in debug mode
 - **Comprehensive summary** with overall risk assessment
+- **Standalone HTML reports** for sharing and archiving scan results
 - **Cross-platform support** (Windows & Linux)
 
 ## 📋 Requirements
@@ -106,6 +107,9 @@ cvewatchdog http://localhost:8001 --debug
 
 # Specify custom API URL
 cvewatchdog http://<IP_DU_SERVEUR>:8001
+
+# Generate a standalone HTML report
+cvewatchdog http://localhost:8001 --html-report cvewatchdog-report.html
 ```
 
 ## 📊 Output

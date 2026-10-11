@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -80,6 +81,41 @@ Packager        : Arch Linux
 
         with self.assertRaises(SystemExit):
             cvewatchdog.get_installed_software()
+
+    def test_html_report_is_standalone_and_escapes_nvd_content(self):
+        applications = [{
+            "name": "Widget <script>",
+            "version": "1.0",
+            "cpe": "cpe:2.3:a:acme:widget:*",
+            "cves": [{
+                "cve_id": "CVE-2026-0001",
+                "cvss_score": 9.8,
+                "version": "<2.0",
+                "published": "2026-01-01T00:00:00Z",
+                "description": "<img src=x onerror=alert(1)>",
+            }],
+        }]
+        summary = {
+            "software_scanned": 1,
+            "software_resolved": 1,
+            "api_errors": 0,
+            "total_cves": 1,
+            "critical": 1,
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "risk_level": "CRITICAL RISK",
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.html"
+            result = cvewatchdog.write_html_report(path, applications, summary)
+            document = path.read_text(encoding="utf-8")
+
+        self.assertEqual(path.resolve(), result)
+        self.assertIn("CVE-2026-0001", document)
+        self.assertIn("&lt;script&gt;", document)
+        self.assertNotIn("<img src=x", document)
 
 
 if __name__ == "__main__":
