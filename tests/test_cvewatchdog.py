@@ -90,6 +90,7 @@ Packager        : Arch Linux
             "cves": [{
                 "cve_id": "CVE-2026-0001",
                 "cvss_score": 9.8,
+                "cwes": ["CWE-863"],
                 "version": "<2.0",
                 "published": "2026-01-01T00:00:00Z",
                 "description": "A local attacker can gain elevated privileges. <img src=x onerror=alert(1)>",
@@ -119,12 +120,18 @@ Packager        : Arch Linux
         self.assertIn('id="report-search"', document)
         self.assertIn('id="severity-filter"', document)
         self.assertIn('id="type-filter"', document)
+        self.assertIn('id="cwe-filter"', document)
+        self.assertIn('<option value="CWE-863">CWE-863</option>', document)
         self.assertIn('class="software-choice"', document)
         self.assertIn('data-software="software-0"', document)
         self.assertIn("Vulnerable software", document)
         self.assertIn('class="software-cve-count">1 CVE</span>', document)
         self.assertIn('data-severity="critical"', document)
         self.assertIn('data-types="lpe"', document)
+        self.assertIn('data-cwes="CWE-863"', document)
+        self.assertIn('class="cwe-chip">CWE-863</span>', document)
+        self.assertIn("row.dataset.cwes", document)
+        self.assertIn("scrollbar-color", document)
         self.assertIn('class="type-chip">LPE</span>', document)
         self.assertIn('class="hero"', document)
         self.assertIn('class="panel filter-panel"', document)
