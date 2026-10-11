@@ -1,4 +1,5 @@
 import argparse
+import logging
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -12,6 +13,7 @@ from CVEWatchdog import get_cvss_severity, resolve_software, run_sploitscan, wri
 JOBS = {}
 JOBS_LOCK = threading.Lock()
 EXECUTOR = ThreadPoolExecutor(max_workers=1)
+LOGGER = logging.getLogger("uvicorn.error")
 
 
 def validate_inventory(payload):
@@ -108,11 +110,12 @@ def build_report(job_id, inventory, fastcve_url, reports_dir):
 
         intelligence = None
         if inventory["sploitscan"] and all_cves:
+            cve_count = len(set(cve.get("cve_id") for cve in all_cves if cve.get("cve_id")))
             with JOBS_LOCK:
-                JOBS[job_id].update(stage="SploitScan enrichment", processed=0, total=len(set(
-                    cve.get("cve_id") for cve in all_cves if cve.get("cve_id")
-                )))
+                JOBS[job_id].update(stage="SploitScan enrichment", processed=0, total=cve_count)
+            LOGGER.info("SploitScan enrichment started for %d CVEs (report %s)", cve_count, job_id)
             intelligence = run_sploitscan(all_cves)
+            LOGGER.info("SploitScan enrichment completed for %d CVEs (report %s)", cve_count, job_id)
 
         summary = make_summary(len(inventory["software"]), resolved, api_errors, all_cves)
         report_path = reports_dir / f"{job_id}.html"

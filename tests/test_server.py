@@ -22,9 +22,10 @@ class ServerTests(unittest.TestCase):
         self.assertFalse(inventory["sploitscan"])
         self.assertEqual("NSClient++", inventory["software"][0]["name"])
 
+    @patch.object(cvewatchdog_server.LOGGER, "info")
     @patch.object(cvewatchdog_server, "run_sploitscan")
     @patch.object(cvewatchdog_server, "resolve_software")
-    def test_worker_resolves_inventory_and_writes_report(self, resolve, run_sploitscan):
+    def test_worker_resolves_inventory_and_writes_report(self, resolve, run_sploitscan, log_info):
         resolve.return_value = {
             "matched_cpe": {"cpe": "cpe:2.3:a:acme:widget:*", "score": 1},
             "results": [{
@@ -51,6 +52,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(1, cvewatchdog_server.JOBS["job"]["summary"]["critical"])
         resolve.assert_called_once_with("http://fastcve:8001", "Widget", "1.0", "Acme", "windows")
         run_sploitscan.assert_called_once()
+        log_info.assert_any_call("SploitScan enrichment started for %d CVEs (report %s)", 1, "job")
+        log_info.assert_any_call("SploitScan enrichment completed for %d CVEs (report %s)", 1, "job")
 
     def test_http_api_exposes_report_routes(self):
         with tempfile.TemporaryDirectory() as directory:
