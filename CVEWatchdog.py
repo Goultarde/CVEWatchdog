@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 import requests
+from cwe_names import CWE_NAMES
 
 CVSS_LEVELS = {
     "Critical": 9.0,
@@ -253,13 +254,16 @@ def write_html_report(path, software_with_cves, summary):
             }, key=lambda value: int(value[4:]))
             report_cwes.update(cwes)
             cwe_values = " ".join(cwes) or "unknown"
-            cwe_label = ", ".join(cwes) or "Unknown"
+            cwe_badges = " ".join(
+                f'<span class="cwe-chip" title="{html.escape(CWE_NAMES.get(cwe, "Unknown CWE"), quote=True)}">{cwe}</span>'
+                for cwe in cwes
+            ) or '<span class="cwe-chip">Unknown</span>'
             rows.append(
                 f'<tr class="row-{severity.lower()}" data-severity="{severity.lower()}" data-types="{" ".join(value for value, _ in vulnerability_types)}" data-cwes="{cwe_values}">'
                 f'<td><span class="cve-id">{html.escape(str(cve.get("cve_id", "")))}</span></td>'
                 f'<td><span class="severity {severity.lower()}">{severity}</span></td>'
                 f'<td><span class="type-chip">{html.escape(", ".join(label for _, label in vulnerability_types))}</span></td>'
-                f'<td><span class="cwe-chip">{cwe_label}</span></td>'
+                f'<td>{cwe_badges}</td>'
                 f'<td>{html.escape(str(score if score is not None else "N/A"))}</td>'
                 f'<td>{html.escape(str(cve.get("version", "")))}</td>'
                 f'<td>{html.escape(str(cve.get("published", "")).split("T")[0])}</td>'
@@ -288,7 +292,7 @@ def write_html_report(path, software_with_cves, summary):
         )
     )
     cwe_options = "".join(
-        f'<option value="{cwe}">{cwe}</option>'
+        f'<option value="{cwe}">{cwe} — {html.escape(CWE_NAMES.get(cwe, "Unknown CWE"))}</option>'
         for cwe in sorted(report_cwes, key=lambda value: int(value[4:]))
     )
     document = f"""<!doctype html>

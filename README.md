@@ -115,6 +115,7 @@ cvewatchdog http://localhost:8001 --html-report cvewatchdog-report.html
 The HTML report can be filtered locally by software, CPE, CVE, CWE, description, severity,
 or inferred vulnerability type (LPE, RCE, privilege escalation, DoS, information
 disclosure, authentication bypass, XSS, SQL injection, or path traversal).
+The CWE selector includes weakness names from the bundled MITRE CWE catalog.
 Its opening software list shows the number of CVEs per vulnerable application and
 can display all, none, one, or any selected combination of applications.
 

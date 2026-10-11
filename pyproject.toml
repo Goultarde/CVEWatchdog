@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cvewatchdog"
-version = "1.4.0"
+version = "1.4.1"
 description = "Cross-platform installed-software vulnerability scanner for FastCVE-API"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -15,4 +15,4 @@ dependencies = ["requests==2.32.5"]
 cvewatchdog = "CVEWatchdog:main"
 
 [tool.setuptools]
-py-modules = ["CVEWatchdog"]
+py-modules = ["CVEWatchdog", "cwe_names"]
