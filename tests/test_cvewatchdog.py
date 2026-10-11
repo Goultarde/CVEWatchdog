@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -57,6 +58,7 @@ class APIClientTests(unittest.TestCase):
 
         self.assertEqual(0, ignored)
         self.assertEqual(("firefox", "123.0"), (software[0].name, software[0].version))
+        self.assertEqual("C", run.call_args.kwargs["env"]["LC_ALL"])
 
     def test_pacman_inventory_includes_package_context(self):
         output = """Name            : base
@@ -71,6 +73,13 @@ Packager        : Arch Linux
 
         self.assertEqual(("base", "3"), (software[0].name, software[0].version))
         self.assertIn("archlinux.org", software[0].context)
+
+    @patch.object(cvewatchdog.subprocess, "run")
+    def test_empty_inventory_is_an_error(self, run):
+        run.return_value = Mock(returncode=0, stdout="")
+
+        with self.assertRaises(SystemExit):
+            cvewatchdog.get_installed_software()
 
 
 if __name__ == "__main__":

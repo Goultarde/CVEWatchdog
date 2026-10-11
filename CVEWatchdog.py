@@ -1,4 +1,5 @@
 import argparse
+import os
 import subprocess
 import sys
 import requests
@@ -67,15 +68,18 @@ def get_installed_software():
                 command,
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=10,
+                env={**os.environ, "LC_ALL": "C"},
             )
             
             if result.returncode == 0:
                 if pm_name == "pacman":
                     software = parse_pacman_inventory(result.stdout)
-                    print(f"{Colors.GREEN}✅ Found {len(software)} packages using pacman "
-                          f"(ignoring {ignored} system packages){Colors.RESET}")
-                    return software, ignored
+                    if software:
+                        print(f"{Colors.GREEN}✅ Found {len(software)} packages using pacman "
+                              f"(ignoring {ignored} system packages){Colors.RESET}")
+                        return software, ignored
+                    continue
 
                 lines = result.stdout.strip().split('\n')
                 
@@ -112,9 +116,10 @@ def get_installed_software():
                             context=" ".join(parts[2:]),
                         ))
                 
-                print(f"{Colors.GREEN}✅ Found {len(software)} packages using {pm_name} "
-                      f"(ignoring {ignored} system packages){Colors.RESET}")
-                return software, ignored
+                if software:
+                    print(f"{Colors.GREEN}✅ Found {len(software)} packages using {pm_name} "
+                          f"(ignoring {ignored} system packages){Colors.RESET}")
+                    return software, ignored
                 
         except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.CalledProcessError):
             continue
