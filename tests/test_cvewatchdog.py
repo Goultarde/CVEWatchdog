@@ -122,10 +122,12 @@ Packager        : Arch Linux
         self.assertIn('class="software-choice"', document)
         self.assertIn('data-software="software-0"', document)
         self.assertIn("Vulnerable software", document)
-        self.assertIn("(1 CVEs)", document)
+        self.assertIn('class="software-cve-count">1 CVE</span>', document)
         self.assertIn('data-severity="critical"', document)
         self.assertIn('data-types="lpe"', document)
-        self.assertIn(">LPE</td>", document)
+        self.assertIn('class="type-chip">LPE</span>', document)
+        self.assertIn('class="hero"', document)
+        self.assertIn('class="panel filter-panel"', document)
         self.assertIn("function filterReport()", document)
 
     def test_vulnerability_type_classification_is_conservative(self):
