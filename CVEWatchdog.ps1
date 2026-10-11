@@ -1,5 +1,8 @@
 ﻿param(
     [string]$ApiUrl = "http://localhost:8001",
+    [string]$ServerUrl,
+    [string]$HtmlReport = "cvewatchdog-report.html",
+    [switch]$NoSploitScan,
     [switch]$Wildcards,
     [switch]$DebugMatching
 )
@@ -137,11 +140,79 @@ function Format-CVETable {
     }
 }
 
+function Request-ServerReport {
+    param(
+        [array]$Software,
+        [string]$OutputPath
+    )
+
+    $payload = @{
+        hostname = $env:COMPUTERNAME
+        platform = "windows"
+        software = @($Software | ForEach-Object {
+            @{
+                name = $_.Name
+                version = $_.Version
+                context = $_.Context
+            }
+        })
+        options = @{ sploitscan = -not $NoSploitScan.IsPresent }
+    } | ConvertTo-Json -Depth 5
+
+    $job = Invoke-RestMethod `
+        -Uri "$($ServerUrl.TrimEnd('/'))/api/v1/reports" `
+        -Method Post `
+        -ContentType "application/json; charset=utf-8" `
+        -Body $payload `
+        -TimeoutSec 30
+
+    do {
+        Start-Sleep -Seconds 2
+        $status = Invoke-RestMethod `
+            -Uri "$($ServerUrl.TrimEnd('/'))/api/v1/reports/$($job.id)" `
+            -Method Get `
+            -TimeoutSec 10
+        Write-Host "  $($status.stage): $($status.processed)/$($status.total)"
+        if ($status.status -eq "failed") {
+            throw "CVEWatchdog Server failed: $($status.error)"
+        }
+    } until ($status.status -eq "completed")
+
+    $fullPath = [IO.Path]::GetFullPath($OutputPath)
+    $parent = Split-Path -Parent $fullPath
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    Invoke-WebRequest `
+        -Uri "$($ServerUrl.TrimEnd('/'))/api/v1/reports/$($job.id)/html" `
+        -OutFile $fullPath `
+        -UseBasicParsing `
+        -TimeoutSec 60
+    return $fullPath
+}
+
 if ($MyInvocation.InvocationName -eq '.') { return }
 
 Write-Host "`n═════════════════════════════════════════" -ForegroundColor Cyan
 Write-Host "                CVEWatchdog                "
 Write-Host "═════════════════════════════════════════`n" -ForegroundColor Cyan
+
+if ($ServerUrl) {
+    Write-Host "🌐 Checking CVEWatchdog Server..." -ForegroundColor Cyan
+    try {
+        $health = Invoke-RestMethod -Uri "$($ServerUrl.TrimEnd('/'))/health" -Method Get -TimeoutSec 5
+        Write-Host "✅ Server connected - FastCVE: $($health.fastcve)`n" -ForegroundColor Green
+        $softwareData = Get-InstalledSoftware
+        Write-Host "`n📡 Sending inventory to CVEWatchdog Server..." -ForegroundColor Cyan
+        $reportPath = Request-ServerReport -Software $softwareData.software -OutputPath $HtmlReport
+        Write-Host "✅ HTML report downloaded to $reportPath" -ForegroundColor Green
+        exit 0
+    }
+    catch {
+        Write-Host "❌ Server report error: $($_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }
+}
 
 Write-Host "🌐 Checking API connectivity..." -ForegroundColor Cyan
 try {

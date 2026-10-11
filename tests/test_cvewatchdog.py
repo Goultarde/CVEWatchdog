@@ -121,7 +121,9 @@ Packager        : Arch Linux
         self.assertIn('id="severity-filter"', document)
         self.assertIn('id="type-filter"', document)
         self.assertIn('id="cwe-filter"', document)
-        self.assertIn('<option value="CWE-863">CWE-863 — Incorrect Authorization</option>', document)
+        self.assertIn('<option value="CWE-863">CWE-863: Incorrect Authorization</option>', document)
+        self.assertNotIn("—", document)
+        self.assertNotIn("–", document)
         self.assertIn('class="software-choice"', document)
         self.assertIn('data-software="software-0"', document)
         self.assertIn("Vulnerable software", document)
@@ -137,6 +139,56 @@ Packager        : Arch Linux
         self.assertIn('class="panel filter-panel"', document)
         self.assertIn("function filterReport()", document)
 
+    @patch.object(cvewatchdog.subprocess, "run")
+    def test_sploitscan_results_are_indexed_by_cve(self, run):
+        def export_json(command, **kwargs):
+            export = Path(kwargs["cwd"]) / "result.json"
+            export.write_text('[{"CVE Data":{"cveMetadata":{"cveId":"CVE-2026-0001"}}}]', encoding="utf-8")
+            return Mock(returncode=0, stdout="Data exported to file: result.json\n", stderr="")
+
+        run.side_effect = export_json
+        result = cvewatchdog.run_sploitscan([
+            {"cve_id": "CVE-2026-0001"},
+            {"cve_id": "CVE-2026-0001"},
+            {"cve_id": "invalid"},
+        ])
+
+        self.assertIn("CVE-2026-0001", result)
+        command = run.call_args.args[0]
+        self.assertEqual("sploitscan", command[0])
+        self.assertIn("cisa,epss,prio", command)
+
+    def test_html_report_includes_sploitscan_intelligence(self):
+        applications = [{
+            "name": "Widget", "version": "1.0", "cpe": "cpe:2.3:a:acme:widget:*",
+            "cves": [{"cve_id": "CVE-2026-0001", "cvss_score": 9.8, "description": "Test"}],
+        }]
+        summary = {
+            "software_scanned": 1, "software_resolved": 1, "api_errors": 0,
+            "total_cves": 1, "critical": 1, "high": 0, "medium": 0, "low": 0,
+            "risk_level": "CRITICAL RISK",
+        }
+        intelligence = {"CVE-2026-0001": {
+            "EPSS Data": {"data": [{"epss": "0.42"}]},
+            "CISA Data": {"cisa_status": "Yes"},
+            "Priority": {"Priority": "A+"},
+            "GitHub Data": {"pocs": [{"html_url": "https://example.test/poc"}]},
+            "Metasploit Data": {"modules": [{"name": "exploit/test"}]},
+        }}
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.html"
+            cvewatchdog.write_html_report(path, applications, summary, intelligence)
+            document = path.read_text(encoding="utf-8")
+
+        self.assertIn("<th>EPSS</th><th>CISA KEV</th><th>Priority</th><th>Exploits</th>", document)
+        self.assertIn("42.0%", document)
+        self.assertIn('class="intel-chip">Yes</span>', document)
+        self.assertIn('class="intel-chip">A+</span>', document)
+        self.assertIn("<summary>2 exploit(s)</summary>", document)
+        self.assertIn('href="https://example.test/poc"', document)
+        self.assertIn('target="_blank" rel="noopener noreferrer">GitHub PoC</a>', document)
+
     def test_vulnerability_type_classification_is_conservative(self):
         self.assertIn(("lpe", "LPE"), cvewatchdog.classify_vulnerability(
             "A local attacker can elevate their privileges."
@@ -150,6 +202,35 @@ Packager        : Arch Linux
         self.assertEqual([("other", "Other")], cvewatchdog.classify_vulnerability(
             "An attacker can modify application settings."
         ))
+
+    @patch.object(cvewatchdog.time, "sleep")
+    @patch.object(cvewatchdog.requests, "get")
+    @patch.object(cvewatchdog.requests, "post")
+    def test_client_downloads_remote_server_report(self, post, get, sleep):
+        submitted = Mock()
+        submitted.json.return_value = {"id": "job-1"}
+        post.return_value = submitted
+        completed = Mock()
+        completed.json.return_value = {"status": "completed", "stage": "completed"}
+        report = Mock(content=b"<html>report</html>")
+        get.side_effect = [completed, report]
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.html"
+            result = cvewatchdog.request_server_report(
+                "http://server:8002/",
+                [cvewatchdog.Software("Widget", "1.0", "Acme")],
+                path,
+            )
+            self.assertEqual(b"<html>report</html>", path.read_bytes())
+
+        self.assertEqual(path.resolve(), result)
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(cvewatchdog.PLATFORM, payload["platform"])
+        self.assertEqual("Widget", payload["software"][0]["name"])
+        self.assertTrue(payload["options"]["sploitscan"])
+        get.assert_any_call("http://server:8002/api/v1/reports/job-1/html", timeout=60)
+        sleep.assert_not_called()
 
 
 if __name__ == "__main__":

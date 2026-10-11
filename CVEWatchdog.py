@@ -1,9 +1,13 @@
 import argparse
 import html
+import json
 import os
+import platform
 import re
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 import requests
 from cwe_names import CWE_NAMES
@@ -131,7 +135,7 @@ def get_installed_software():
     print(f"{Colors.RED}❌ No supported package manager found (dpkg, rpm, pacman, apk){Colors.RESET}")
     sys.exit(1)
 
-def resolve_software(api_url, software_name, version, context=""):
+def resolve_software(api_url, software_name, version, context="", platform_name=PLATFORM):
     """Resolve software to a CPE and applicable CVEs through FastCVE-API."""
     response = requests.post(
         f"{api_url.rstrip('/')}/api/resolve",
@@ -139,7 +143,7 @@ def resolve_software(api_url, software_name, version, context=""):
             "software": software_name,
             "version": version,
             "context": context,
-            "platform": PLATFORM,
+            "platform": platform_name,
         },
         timeout=10,
     )
@@ -227,7 +231,160 @@ def format_cve_table(cves):
         print(f"{cve.get('cve_id', ''):<20} {severity_color}{severity:<12}{Colors.RESET} "
               f"{cvss_str:<8} {cve.get('version', ''):<15} {published:<12} {description:<50}")
 
-def write_html_report(path, software_with_cves, summary):
+def run_sploitscan(cves):
+    """Run the optional SploitScan CLI once and index its JSON results by CVE ID."""
+    cve_ids = list(dict.fromkeys(
+        str(cve.get("cve_id", "")).upper() for cve in cves
+        if re.fullmatch(r"CVE-\d{4}-\d{4,7}", str(cve.get("cve_id", "")), re.IGNORECASE)
+    ))
+    if not cve_ids:
+        return {}
+
+    with tempfile.TemporaryDirectory() as directory:
+        import_path = Path(directory) / "cves.txt"
+        import_path.write_text("\n".join(cve_ids), encoding="utf-8")
+        try:
+            result = subprocess.run(
+                ["sploitscan", "--import-file", str(import_path), "--export", "json",
+                 "--methods", "cisa,epss,prio"],
+                cwd=directory,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            )
+        except FileNotFoundError as error:
+            raise RuntimeError("SploitScan is not installed; run: pipx install sploitscan") from error
+        if result.returncode:
+            detail = (result.stderr or result.stdout).strip().splitlines()
+            raise RuntimeError(detail[-1] if detail else "SploitScan failed")
+
+        match = re.search(r"Data exported to file:\s*(.+\.json)\s*$", result.stdout, re.MULTILINE)
+        if not match:
+            raise RuntimeError("SploitScan did not produce a JSON export")
+        export_path = Path(match.group(1).strip())
+        if not export_path.is_absolute():
+            export_path = Path(directory) / export_path
+        try:
+            records = json.loads(export_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise RuntimeError(f"Cannot read SploitScan export: {error}") from error
+
+    indexed = {}
+    for record in records if isinstance(records, list) else []:
+        if not isinstance(record, dict):
+            continue
+        cve_data = record.get("CVE Data") or {}
+        metadata = cve_data.get("cveMetadata") or {} if isinstance(cve_data, dict) else {}
+        cve_id = metadata.get("cveId") if isinstance(metadata, dict) else None
+        if cve_id:
+            indexed[str(cve_id).upper()] = record
+    return indexed
+
+def sploitscan_values(record):
+    """Return display values from one SploitScan JSON record."""
+    record = record if isinstance(record, dict) else {}
+    epss_record = record.get("EPSS Data") or {}
+    epss_data = epss_record.get("data") or [] if isinstance(epss_record, dict) else []
+    try:
+        epss = f"{float(epss_data[0].get('epss', 0)):.1%}" if epss_data else "N/A"
+    except (TypeError, ValueError):
+        epss = "N/A"
+    github = record.get("GitHub Data") or {}
+    vulncheck = record.get("VulnCheck Data") or {}
+    metasploit = record.get("Metasploit Data") or {}
+    links = []
+    for poc in github.get("pocs") or [] if isinstance(github, dict) else []:
+        if isinstance(poc, dict):
+            links.append(("GitHub", poc.get("html_url")))
+    exploits = len(github.get("pocs") or []) if isinstance(github, dict) else 0
+    exploits += sum(
+        len(item.get("vulncheck_xdb") or [])
+        for item in (vulncheck.get("data") or [] if isinstance(vulncheck, dict) else [])
+        if isinstance(item, dict)
+    )
+    for item in vulncheck.get("data") or [] if isinstance(vulncheck, dict) else []:
+        for exploit in item.get("vulncheck_xdb") or [] if isinstance(item, dict) else []:
+            if isinstance(exploit, dict):
+                url = str(exploit.get("clone_ssh_url") or "").replace("git@github.com:", "https://github.com/")
+                links.append(("VulnCheck", url[:-4] if url.endswith(".git") else url))
+    exploits += len(record.get("ExploitDB Data") or []) if isinstance(record.get("ExploitDB Data"), list) else 0
+    for exploit in record.get("ExploitDB Data") or [] if isinstance(record.get("ExploitDB Data"), list) else []:
+        if isinstance(exploit, dict) and str(exploit.get("id", "")).isdigit():
+            links.append(("Exploit-DB", f'https://www.exploit-db.com/exploits/{exploit["id"]}'))
+    exploits += len(metasploit.get("modules") or []) if isinstance(metasploit, dict) else 0
+    for module in metasploit.get("modules") or [] if isinstance(metasploit, dict) else []:
+        if isinstance(module, dict):
+            links.append(("Metasploit", module.get("url")))
+    nuclei = record.get("Nuclei Data") or {}
+    exploits += int(isinstance(nuclei, dict) and bool(nuclei.get("file_path") or nuclei.get("raw_url")))
+    if isinstance(nuclei, dict):
+        links.append(("Nuclei", nuclei.get("raw_url")))
+    links = list(dict.fromkeys(
+        (source, str(url)) for source, url in links
+        if re.match(r"https?://", str(url or ""), re.IGNORECASE)
+    ))
+    cisa = record.get("CISA Data") or {}
+    cisa_status = cisa.get("cisa_status") if isinstance(cisa, dict) else None
+    priority = record.get("Priority") or {}
+    return {
+        "epss": epss,
+        "kev": cisa_status if cisa_status in ("Yes", "No") else "N/A",
+        "priority": priority.get("Priority") or "N/A" if isinstance(priority, dict) else "N/A",
+        "exploits": exploits,
+        "links": links,
+    }
+
+def request_server_report(server_url, software, output_path, use_sploitscan=True):
+    """Submit an inventory to CVEWatchdog Server and download its completed report."""
+    server_url = server_url.rstrip("/")
+    payload = {
+        "hostname": platform.node(),
+        "platform": PLATFORM,
+        "software": [
+            {"name": item.name, "version": item.version, "context": item.context}
+            for item in software
+        ],
+        "options": {"sploitscan": use_sploitscan},
+    }
+    try:
+        response = requests.post(f"{server_url}/api/v1/reports", json=payload, timeout=30)
+        response.raise_for_status()
+        job = response.json()
+        job_id = job["id"]
+    except (requests.RequestException, ValueError, KeyError, TypeError) as error:
+        raise RuntimeError(f"Cannot submit inventory to CVEWatchdog Server: {error}") from error
+
+    last_progress = None
+    while True:
+        try:
+            response = requests.get(f"{server_url}/api/v1/reports/{job_id}", timeout=10)
+            response.raise_for_status()
+            job = response.json()
+            if not isinstance(job, dict):
+                raise ValueError("invalid status response")
+        except (requests.RequestException, ValueError) as error:
+            raise RuntimeError(f"Cannot read report status: {error}") from error
+        if job.get("status") == "failed":
+            raise RuntimeError(job.get("error") or "Server report failed")
+        if job.get("status") == "completed":
+            break
+        progress = (job.get("processed", 0), job.get("total", 0), job.get("stage", "queued"))
+        if progress != last_progress:
+            print(f"  {progress[2]}: {progress[0]}/{progress[1]}")
+            last_progress = progress
+        time.sleep(2)
+
+    try:
+        response = requests.get(f"{server_url}/api/v1/reports/{job_id}/html", timeout=60)
+        response.raise_for_status()
+    except requests.RequestException as error:
+        raise RuntimeError(f"Cannot download report: {error}") from error
+    report_path = Path(output_path).expanduser()
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_bytes(response.content)
+    return report_path.resolve()
+
+def write_html_report(path, software_with_cves, summary, sploitscan=None):
     """Write a standalone, escaped HTML vulnerability report."""
     sections = []
     software_choices = []
@@ -245,6 +402,7 @@ def write_html_report(path, software_with_cves, summary):
         )
         rows = []
         for cve in app["cves"]:
+            cve_id = str(cve.get("cve_id", ""))
             severity = get_cvss_severity(cve.get("cvss_score"))
             score = cve.get("cvss_score")
             vulnerability_types = classify_vulnerability(str(cve.get("description", "")))
@@ -258,23 +416,40 @@ def write_html_report(path, software_with_cves, summary):
                 f'<span class="cwe-chip" title="{html.escape(CWE_NAMES.get(cwe, "Unknown CWE"), quote=True)}">{cwe}</span>'
                 for cwe in cwes
             ) or '<span class="cwe-chip">Unknown</span>'
+            enrichment = sploitscan_values((sploitscan or {}).get(cve_id.upper()))
+            exploit_links = "".join(
+                f'<li><a href="{html.escape(url, quote=True)}" target="_blank" rel="noopener noreferrer">'
+                f'{html.escape(source)} PoC</a></li>'
+                for source, url in enrichment["links"]
+            )
+            exploit_cell = (
+                f'<details><summary>{enrichment["exploits"]} exploit(s)</summary><ul>{exploit_links}</ul></details>'
+                if exploit_links else str(enrichment["exploits"])
+            )
+            sploitscan_cells = (
+                f'<td>{enrichment["epss"]}</td>'
+                f'<td><span class="intel-chip">{enrichment["kev"]}</span></td>'
+                f'<td><span class="intel-chip">{html.escape(str(enrichment["priority"]))}</span></td>'
+                f'<td>{exploit_cell}</td>'
+            ) if sploitscan is not None else ""
             rows.append(
                 f'<tr class="row-{severity.lower()}" data-severity="{severity.lower()}" data-types="{" ".join(value for value, _ in vulnerability_types)}" data-cwes="{cwe_values}">'
-                f'<td><span class="cve-id">{html.escape(str(cve.get("cve_id", "")))}</span></td>'
+                f'<td><span class="cve-id">{html.escape(cve_id)}</span></td>'
                 f'<td><span class="severity {severity.lower()}">{severity}</span></td>'
                 f'<td><span class="type-chip">{html.escape(", ".join(label for _, label in vulnerability_types))}</span></td>'
                 f'<td>{cwe_badges}</td>'
                 f'<td>{html.escape(str(score if score is not None else "N/A"))}</td>'
                 f'<td>{html.escape(str(cve.get("version", "")))}</td>'
-                f'<td>{html.escape(str(cve.get("published", "")).split("T")[0])}</td>'
+                f'<td>{html.escape(str(cve.get("published", "")).split("T")[0])}</td>{sploitscan_cells}'
                 f'<td>{html.escape(str(cve.get("description", "")))}</td></tr>'
             )
+        sploitscan_headers = "<th>EPSS</th><th>CISA KEV</th><th>Priority</th><th>Exploits</th>" if sploitscan is not None else ""
         sections.append(
             f'<section class="report-section" data-software="{software_id}"><div class="section-heading"><div>'
             f'<h2>{html.escape(app["name"])} <small>{html.escape(app["version"])}</small></h2>'
             f'<p class="cpe">{html.escape(app["cpe"])}</p></div><span class="section-count">{cve_label}</span></div>'
             '<div class="table-wrap"><table><thead><tr><th>CVE</th><th>Severity</th><th>Type</th><th>CWE</th>'
-            '<th>CVSS</th><th>Affected version</th><th>Published</th><th>Description</th>'
+            f'<th>CVSS</th><th>Affected version</th><th>Published</th>{sploitscan_headers}<th>Description</th>'
             f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div></section>'
         )
 
@@ -292,7 +467,7 @@ def write_html_report(path, software_with_cves, summary):
         )
     )
     cwe_options = "".join(
-        f'<option value="{cwe}">{cwe} — {html.escape(CWE_NAMES.get(cwe, "Unknown CWE"))}</option>'
+        f'<option value="{cwe}">{cwe}: {html.escape(CWE_NAMES.get(cwe, "Unknown CWE"))}</option>'
         for cwe in sorted(report_cwes, key=lambda value: int(value[4:]))
     )
     document = f"""<!doctype html>
@@ -314,7 +489,8 @@ main{{max-width:1480px;margin:auto;padding:36px 28px 64px}} h1,h2,p{{margin-top:
 .filters{{display:grid;grid-template-columns:minmax(240px,1.4fr) repeat(3,minmax(170px,1fr));gap:12px}} .filters label{{display:grid;gap:6px;color:var(--muted);font-size:12px;font-weight:650}} .filters input,.filters select{{width:100%;padding:10px 12px;border:1px solid #34445e;border-radius:9px;outline:none;background:#0c1422;color:var(--text)}} .filters input:focus,.filters select:focus{{border-color:var(--accent);box-shadow:0 0 0 3px rgba(34,211,238,.12)}}
 .report-section{{overflow:hidden}} .section-heading{{padding:18px 20px}} .section-heading h2 small{{margin-left:6px;color:var(--muted);font-weight:500}} .cpe{{margin:4px 0 0;color:#8291a7;font:12px ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}}
 .table-wrap{{overflow:auto}} table{{width:100%;border-collapse:collapse}} th{{padding:11px 13px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:#0d1625;color:#90a0b6;font-size:11px;letter-spacing:.06em;text-align:left;text-transform:uppercase;white-space:nowrap}} td{{padding:12px 13px;border-bottom:1px solid rgba(38,51,74,.65);vertical-align:top}} tbody tr:last-child td{{border-bottom:0}} tbody tr:hover{{background:rgba(34,211,238,.035)}} .cve-id{{font-weight:750;color:#dbeafe;white-space:nowrap}}
-.severity,.type-chip,.cwe-chip{{display:inline-block;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:800;white-space:nowrap}} .severity.critical{{background:rgba(251,113,133,.13);color:var(--critical)}} .severity.high{{background:rgba(251,146,60,.13);color:var(--high)}} .severity.medium{{background:rgba(250,204,21,.13);color:var(--medium)}} .severity.low{{background:rgba(74,222,128,.13);color:var(--low)}} .severity.unknown{{background:#263246;color:#bac4d2}} .type-chip{{background:#202b40;color:#cbd5e1;font-weight:650}} .cwe-chip{{background:rgba(34,211,238,.1);color:#a5f3fc;font-weight:650}}
+.severity,.type-chip,.cwe-chip,.intel-chip{{display:inline-block;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:800;white-space:nowrap}} .severity.critical{{background:rgba(251,113,133,.13);color:var(--critical)}} .severity.high{{background:rgba(251,146,60,.13);color:var(--high)}} .severity.medium{{background:rgba(250,204,21,.13);color:var(--medium)}} .severity.low{{background:rgba(74,222,128,.13);color:var(--low)}} .severity.unknown{{background:#263246;color:#bac4d2}} .type-chip{{background:#202b40;color:#cbd5e1;font-weight:650}} .cwe-chip{{background:rgba(34,211,238,.1);color:#a5f3fc;font-weight:650}} .intel-chip{{background:rgba(167,139,250,.12);color:#ddd6fe}}
+details summary{{color:#a5f3fc;cursor:pointer;white-space:nowrap}} details ul{{min-width:130px;margin:7px 0 0;padding-left:18px}} details a{{color:#93c5fd;text-decoration:none}} details a:hover{{text-decoration:underline}}
 .empty-state{{padding:36px;text-align:center;color:var(--muted)}} footer{{padding-top:24px;color:#66758a;text-align:center;font-size:12px}}
 @media(max-width:900px){{main{{padding:20px 14px 40px}} .hero{{align-items:flex-start;padding:22px;flex-direction:column}} .risk-card{{width:100%;text-align:left}} .cards{{grid-template-columns:repeat(2,1fr)}} .filter-panel{{position:static}} .filters{{grid-template-columns:1fr}}}}
 @media(max-width:560px){{.mark{{display:none}} .panel-title{{align-items:flex-start;flex-direction:column}} .software-list{{grid-template-columns:minmax(130px,1fr) auto}} .software-cve-count{{display:none}} .cards{{grid-template-columns:1fr 1fr}} .metric-card{{padding:14px}}}}
@@ -332,6 +508,7 @@ function filterReport(){{let visible=0,query=search.value.trim().toLowerCase(),s
 search.addEventListener('input',filterReport);severity.addEventListener('change',filterReport);type.addEventListener('change',filterReport);cwe.addEventListener('change',filterReport);software.forEach(choice=>choice.addEventListener('change',filterReport));
 document.getElementById('software-all').addEventListener('click',()=>{{software.forEach(choice=>choice.checked=true);filterReport();}});document.getElementById('software-none').addEventListener('click',()=>{{software.forEach(choice=>choice.checked=false);filterReport();}});document.querySelectorAll('[data-only]').forEach(button=>button.addEventListener('click',()=>{{software.forEach(choice=>choice.checked=choice.value===button.dataset.only);filterReport();}}));filterReport();
 </script></body></html>"""
+    document = document.replace("—", "-").replace("–", "-")
     report_path = Path(path).expanduser()
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(document, encoding="utf-8")
@@ -348,12 +525,31 @@ def main():
     parser.add_argument('--wildcards', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--debug', action='store_true', help='Enable debug output for matching')
     parser.add_argument('--html-report', metavar='PATH', help='Write a standalone HTML report')
+    parser.add_argument('--sploitscan', action='store_true', help='Enrich the HTML report with SploitScan intelligence')
+    parser.add_argument('--server-url', help='Send the inventory to CVEWatchdog Server instead of FastCVE-API')
+    parser.add_argument('--no-sploitscan', action='store_true', help='Disable SploitScan in server mode')
     
     args = parser.parse_args()
+    if args.sploitscan and not args.html_report:
+        parser.error('--sploitscan requires --html-report')
     
     print(f"\n{Colors.CYAN}{'═' * 45}")
     print("                CVEWatchdog                ")
     print(f"{'═' * 45}{Colors.RESET}\n")
+
+    if args.server_url:
+        software_list, _ = get_installed_software()
+        destination = args.html_report or "cvewatchdog-report.html"
+        print(f"\n{Colors.CYAN}📡 Sending inventory to CVEWatchdog Server...{Colors.RESET}")
+        try:
+            report_path = request_server_report(
+                args.server_url, software_list, destination, not args.no_sploitscan
+            )
+        except (RuntimeError, OSError) as error:
+            print(f"{Colors.RED}❌ Server report error: {error}{Colors.RESET}")
+            sys.exit(1)
+        print(f"{Colors.GREEN}✅ HTML report downloaded to {report_path}{Colors.RESET}")
+        return
     
     # Check API connectivity
     print(f"{Colors.CYAN}🌐 Checking API connectivity...{Colors.RESET}")
@@ -471,6 +667,14 @@ def main():
     print()
 
     if args.html_report:
+        sploitscan_results = None
+        if args.sploitscan:
+            print(f"{Colors.CYAN}🧨 Enriching {len(set(cve.get('cve_id') for cve in all_cves))} CVEs with SploitScan...{Colors.RESET}")
+            try:
+                sploitscan_results = run_sploitscan(all_cves)
+            except RuntimeError as error:
+                print(f"{Colors.RED}❌ SploitScan error: {error}{Colors.RESET}")
+                sys.exit(1)
         summary = {
             "software_scanned": len(software_list),
             "software_resolved": api_matches,
@@ -483,7 +687,7 @@ def main():
             "risk_level": risk_level,
         }
         try:
-            report_path = write_html_report(args.html_report, software_with_cves, summary)
+            report_path = write_html_report(args.html_report, software_with_cves, summary, sploitscan_results)
         except OSError as error:
             print(f"{Colors.RED}❌ Cannot write HTML report: {error}{Colors.RESET}")
             sys.exit(1)

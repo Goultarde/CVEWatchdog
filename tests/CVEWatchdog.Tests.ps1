@@ -29,3 +29,35 @@ Describe "Resolve-Software" {
         }
     }
 }
+
+Describe "Request-ServerReport" {
+    It "submits a Windows inventory and downloads the completed report" {
+        $script:ServerUrl = "http://server:8002"
+        $script:NoSploitScan = $false
+        Mock Start-Sleep {}
+        Mock Test-Path { $true }
+        Mock Invoke-RestMethod {
+            if ($Uri -like "*/api/v1/reports/*") {
+                return [PSCustomObject]@{
+                    id = "job-1"; status = "completed"; stage = "completed"; processed = 1; total = 1
+                }
+            }
+            return [PSCustomObject]@{ id = "job-1" }
+        }
+        Mock Invoke-WebRequest {}
+
+        Request-ServerReport -Software @([PSCustomObject]@{
+            Name = "VLC media player"; Version = "3.0.21"; Context = "VideoLAN"
+        }) -OutputPath "report.html"
+
+        Should -Invoke Invoke-RestMethod -Times 1 -ParameterFilter {
+            $Method -eq "Post" -and
+            $Uri -eq "http://server:8002/api/v1/reports" -and
+            ($Body | ConvertFrom-Json).platform -eq "windows" -and
+            ($Body | ConvertFrom-Json).software[0].name -eq "VLC media player"
+        }
+        Should -Invoke Invoke-WebRequest -Times 1 -ParameterFilter {
+            $Uri -eq "http://server:8002/api/v1/reports/job-1/html"
+        }
+    }
+}
