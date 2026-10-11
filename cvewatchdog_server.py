@@ -135,11 +135,11 @@ def create_app(fastcve_url="http://localhost:8001", reports_dir=None):
         from fastapi import FastAPI, HTTPException, Request
         from fastapi.responses import FileResponse
     except ImportError as error:
-        raise RuntimeError("Server dependencies are missing; install with: pipx install '.[server]'") from error
+        raise RuntimeError("Server dependencies are missing; reinstall CVEWatchdog with pipx --force") from error
 
     report_root = Path(reports_dir or "~/.local/share/cvewatchdog/reports").expanduser().resolve()
     report_root.mkdir(parents=True, exist_ok=True)
-    app = FastAPI(title="CVEWatchdog Server", version="2.0.0")
+    app = FastAPI(title="CVEWatchdog Server", version="2.0.1")
 
     @app.get("/health")
     def health():
@@ -202,7 +202,7 @@ def main():
     try:
         import uvicorn
     except ImportError as error:
-        raise SystemExit("Server dependencies are missing; install with: pipx install '.[server]'") from error
+        raise SystemExit("Server dependencies are missing; reinstall CVEWatchdog with pipx --force") from error
     uvicorn.run(create_app(args.fastcve_url, args.reports_dir), host=args.host, port=args.port)
 
 

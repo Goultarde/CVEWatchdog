@@ -68,7 +68,7 @@ enriches their CVEs with SploitScan, and stores the generated HTML reports.
 
 ```bash
 cd CVEWatchdog
-pipx install '.[server]' --force
+pipx install . --force
 pipx install sploitscan
 
 cvewatchdog-server \
