@@ -1,9 +1,7 @@
 import argparse
 import subprocess
 import sys
-import re
 import requests
-from urllib.parse import quote
 
 CVSS_LEVELS = {
     "Critical": 9.0,
@@ -95,72 +93,15 @@ def get_installed_software():
     print(f"{Colors.RED}❌ No supported package manager found (dpkg, rpm, pacman, apk){Colors.RESET}")
     sys.exit(1)
 
-def get_product_name_variations(software_name, version):
-    """Generate name variations for API matching (optimized for Linux packages)"""
-    tier1, tier2 = [], []
-    all_variations = set()
-    
-    def add_variation(value, tier_list):
-        if value and len(value.strip()) > 1 and not value.isdigit():
-            if value not in all_variations:
-                all_variations.add(value)
-                tier_list.append(value)
-    
-    # TIER 1: Exact package name
-    add_variation(software_name, tier1)
-    
-    # TIER 2: Common transformations
-    # Remove trailing numbers (e.g., libssl3 -> libssl)
-    base_name = re.sub(r'\d+\Z', '', software_name)
-    if base_name != software_name:
-        add_variation(base_name, tier2)
-    
-    # Remove common suffixes
-    for suffix in ['-dev', '-doc', '-common', '-data', '-bin', '-tools', '-utils']:
-        if software_name.endswith(suffix):
-            cleaned = software_name[:-len(suffix)]
-            add_variation(cleaned, tier2)
-    
-    return {
-        'tier1': tier1,
-        'tier2': tier2
-    }
-
-def get_cves_from_api(api_url, software_name, version, debug=False):
-    """Query the CVE API for vulnerabilities"""
-    variations = get_product_name_variations(software_name, version)
-    
-    if debug:
-        print(f"{Colors.GRAY}DEBUG - Name variations for '{software_name}':{Colors.RESET}")
-        for tier in ['tier1', 'tier2']:
-            if variations[tier]:
-                print(f"{Colors.GRAY}  {tier}:{Colors.RESET}")
-                for var in variations[tier]:
-                    print(f"{Colors.GRAY}    → {var}{Colors.RESET}")
-    
-    for tier in ['tier1', 'tier2']:
-        for name in variations[tier]:
-            try:
-                uri = f"{api_url}/api/cve/search?software={quote(name)}"
-                if version:
-                    uri += f"&version={quote(version)}"
-                
-                response = requests.get(uri, timeout=10)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get('results'):
-                        if debug:
-                            print(f"{Colors.GRAY}✨ Matched API using: '{name}' (from {tier}){Colors.RESET}")
-                        return {
-                            'results': data['results'],
-                            'matched_variation': name,
-                            'matched_tier': tier
-                        }
-            except (requests.RequestException, KeyError):
-                continue
-    
-    return None
+def resolve_software(api_url, software_name, version):
+    """Resolve software to a CPE and applicable CVEs through FastCVE-API."""
+    response = requests.post(
+        f"{api_url.rstrip('/')}/api/resolve",
+        json={"software": software_name, "version": version},
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
 
 def get_cvss_severity(score):
     """Get severity level from CVSS score"""
@@ -209,8 +150,13 @@ def format_cve_table(cves):
 
 def main():
     parser = argparse.ArgumentParser(description='CVEWatchdog - Linux Vulnerability Scanner')
-    parser.add_argument('api_url', help='CVE API URL (e.g., http://localhost:5000)')
-    parser.add_argument('--wildcards', action='store_true', help='Include wildcard version matches')
+    parser.add_argument(
+        'api_url',
+        nargs='?',
+        default='http://localhost:8001',
+        help='CVE API URL (default: http://localhost:8001)',
+    )
+    parser.add_argument('--wildcards', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--debug', action='store_true', help='Enable debug output for matching')
     
     args = parser.parse_args()
@@ -222,11 +168,15 @@ def main():
     # Check API connectivity
     print(f"{Colors.CYAN}🌐 Checking API connectivity...{Colors.RESET}")
     try:
-        response = requests.get(f"{args.api_url}/health", timeout=5)
+        response = requests.get(f"{args.api_url.rstrip('/')}/health", timeout=5)
+        response.raise_for_status()
         health = response.json()
         print(f"{Colors.GREEN}✅ API connected - {health.get('cves_indexed', 0)} CVEs indexed{Colors.RESET}\n")
-    except requests.RequestException as e:
-        print(f"{Colors.RED}❌ Cannot connect to API at {args.api_url}{Colors.RESET}")
+    except requests.RequestException as error:
+        print(f"{Colors.RED}❌ Cannot connect to API at {args.api_url}: {error}{Colors.RESET}")
+        sys.exit(1)
+    except ValueError:
+        print(f"{Colors.RED}❌ {args.api_url} did not return a FastCVE-API health response{Colors.RESET}")
         sys.exit(1)
     
     # Get installed software
@@ -237,29 +187,39 @@ def main():
     software_with_cves = []
     all_cves = []
     api_matches = 0
+    api_errors = 0
     
     for app in software_list:
-        cve_result = get_cves_from_api(args.api_url, app.name, app.version, args.debug)
-        cves = None
-        
-        if cve_result:
-            cves = cve_result['results']
+        try:
+            cve_result = resolve_software(args.api_url, app.name, app.version)
+        except (requests.RequestException, ValueError) as error:
+            api_errors += 1
+            print(f"{Colors.RED}✗ {app.name} ({app.version}) - API error: {error}{Colors.RESET}")
+            continue
+
+        matched_cpe = cve_result.get('matched_cpe')
+        cves = cve_result.get('results', [])
+        if matched_cpe:
             api_matches += 1
-        
-        # Filter out wildcard versions if not requested
-        if not args.wildcards and cves:
-            cves = [cve for cve in cves if cve.get('version') != '*']
+            if args.debug:
+                print(
+                    f"{Colors.GRAY}↳ {app.name}: {matched_cpe['cpe']} "
+                    f"(confidence {matched_cpe['score']:.2f}){Colors.RESET}"
+                )
         
         if cves:
             print(f"{Colors.YELLOW}⚠️  {app.name} ({app.version}) - {len(cves)} CVE(s) detected{Colors.RESET}")
             software_with_cves.append({
                 'name': app.name,
                 'version': app.version,
+                'cpe': matched_cpe['cpe'],
                 'cves': cves
             })
             all_cves.extend(cves)
         else:
-            if args.debug:
+            if args.debug and not matched_cpe:
+                print(f"{Colors.GRAY}? {app.name} ({app.version}) - Software not resolved{Colors.RESET}")
+            elif args.debug:
                 print(f"{Colors.GREEN}✓ {app.name} ({app.version}) - No CVEs detected{Colors.RESET}")
     
     # Print vulnerability report
@@ -272,6 +232,7 @@ def main():
     else:
         for app in software_with_cves:
             print(f"\n{Colors.MAGENTA}📌 {app['name']} - Version: {app['version']}{Colors.RESET}")
+            print(f"{Colors.GRAY}   CPE: {app['cpe']}{Colors.RESET}")
             format_cve_table(app['cves'])
     
     # Print summary
@@ -288,7 +249,8 @@ def main():
     
     print(f"Software scanned        : {len(software_list)}")
     print(f"Software ignored        : {ignored_count}")
-    print(f"API matches found       : {api_matches}")
+    print(f"Software resolved       : {api_matches}")
+    print(f"API errors              : {api_errors}")
     print()
     print(f"{Colors.CYAN}Total CVEs found        : {total_cves}{Colors.RESET}")
     print(f"{Colors.BLACK}Critical vulnerabilities: {critical_count}{Colors.RESET}")

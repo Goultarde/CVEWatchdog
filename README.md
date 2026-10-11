@@ -5,9 +5,10 @@
 ## 🚀 Features
 
 - **Automated scanning** of installed software
-- **Intelligent name matching** with product name variations
+- **Centralized CPE resolution** through FastCVE-API
+- **NVD version-range matching** before a CVE is reported
 - **Detailed CVE reports** with CVSS scores and severity levels
-- **Severity filtering** (Critical, High, Medium, Low)
+- **Explicit unresolved/API-error reporting** in debug mode
 - **Comprehensive summary** with overall risk assessment
 - **Cross-platform support** (Windows & Linux)
 
@@ -16,13 +17,13 @@
 ### Windows
 
 - **PowerShell 5.0+** (Windows 10/11 or Server 2016+)
-- **FastCVE-API** service running locally or accessible on your network
+- **FastCVE-API** service running locally on port 8001 or accessible on your network
 - Administrator access to read Windows Registry
 
 ### Linux
 
 - **Python 3.8+**
-- **FastCVE-API** service running locally or accessible on your network
+- **FastCVE-API** service running locally on port 8001 or accessible on your network
 - Root or sudo access to read package information
 - **Supported package managers:**
   - dpkg (Debian/Ubuntu)
@@ -50,48 +51,61 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 git clone https://github.com/CobblePot59/CVEWatchdog.git
 cd CVEWatchdog
 
-# Install Python dependencies
-pip install requests
+# Install the Python client
+pipx install .
+
+# Update an existing installation
+pipx upgrade cvewatchdog
 ```
 
 ## 🎯 Usage
+
+Install and start FastCVE-API before running the scanner:
+
+```bash
+cd ../FastCVE-API
+pipx install .
+fastcve-api --data-path "$PWD/data"
+```
+
+Then check it from another terminal:
+
+```bash
+curl http://localhost:8001/health
+```
+
+The first API startup downloads and indexes the NVD datasets. Wait until `/health` returns JSON before starting CVEWatchdog.
 
 ### Windows
 
 Basic usage:
 ```powershell
-.\CVEWatchdog.ps1 -ApiUrl http://localhost:8000
+.\CVEWatchdog.ps1
 ```
 
 Advanced options:
 ```powershell
-# Include wildcard CVEs (version = *)
-.\CVEWatchdog.ps1  -ApiUrl http://localhost:8000 -Wildcards
-
-# Enable debug mode to see name variations being tested
-.\CVEWatchdog.ps1  -ApiUrl http://localhost:8000 -DebugMatching
+# Show CPE resolution details
+.\CVEWatchdog.ps1  -ApiUrl http://localhost:8001 -DebugMatching
 
 # Specify custom API URL
-.\CVEWatchdog.ps1 -ApiUrl "http://192.168.1.100:8080"
+.\CVEWatchdog.ps1 -ApiUrl "http://<IP_DU_SERVEUR>:8001"
 ```
 
 ### Linux
 
 Basic usage:
 ```bash
-python3 CVEWatchdog.py http://localhost:8000
+cvewatchdog
 ```
 
 Advanced options:
 ```bash
-# Include wildcard CVEs (version = *)
-python3 CVEWatchdog.py http://localhost:8000 --wildcards
-
-# Enable debug mode to see name variations being tested
-python3 CVEWatchdog.py http://localhost:8000 --debug
+# Show the selected CPE and confidence score
+cvewatchdog http://localhost:8001 --debug
 
 # Specify custom API URL
-python3 CVEWatchdog.py http://192.168.1.100:8080
+cvewatchdog http://<IP_DU_SERVEUR>:8001
 ```
 
 ## 📊 Output
@@ -111,6 +125,26 @@ The script generates a structured report with:
   - Total CVEs found
   - Breakdown by severity
   - Overall risk assessment (🟢 LOW / 🟡 MEDIUM / 🔴 HIGH / ⚫ CRITICAL)
+
+Wildcard CPE entries are evaluated by FastCVE-API together with their NVD version bounds. The legacy `-Wildcards`/`--wildcards` option is still accepted for command compatibility but is no longer needed.
+
+## How matching works
+
+Both clients send the installed display name and version to `POST /api/resolve`. FastCVE-API owns CPE selection and version applicability, so the Python and PowerShell clients use the same matching rules. A resolved product with no CVE is kept distinct from an unresolved product or an API failure.
+
+## Tests
+
+Python client:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+PowerShell client (requires Pester 5):
+
+```powershell
+Invoke-Pester .\tests\CVEWatchdog.Tests.ps1
+```
 
 ![CVEWatchdog.png](.github/pictures/CVEWatchdog.png)
 

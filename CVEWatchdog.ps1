@@ -1,6 +1,5 @@
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$ApiUrl,
+    [string]$ApiUrl = "http://localhost:8001",
     [switch]$Wildcards,
     [switch]$DebugMatching
 )
@@ -27,163 +26,46 @@ function Get-InstalledSoftware {
     $uninstall32 = Get-ItemProperty $path32 -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -and $_.DisplayVersion }
 
     foreach ($item in $uninstall64 + $uninstall32) {
-        if ($item.DisplayName -match "^(Windows|Microsoft)") { 
-            $ignored++
-            continue 
-        }
         $software += [PSCustomObject]@{
             Name    = $item.DisplayName
             Version = $item.DisplayVersion
         }
     }
 
-    $software = $software | Sort-Object -Property Name -Unique
+    $software = $software | Sort-Object -Property Name, Version -Unique
     
-    Write-Host "✅ Found $($software.Count) installed software entries (ignoring $ignored Windows/Microsoft entries)" -ForegroundColor Green
+    Write-Host "✅ Found $($software.Count) installed software entries" -ForegroundColor Green
     return @{ 
         software = @($software)
         ignored = $ignored
     }
 }
 
-function Get-ProductNameVariations {
+function Resolve-Software {
     param(
         [string]$SoftwareName,
         [string]$Version
     )
     
-    $tier1List = [System.Collections.ArrayList]@()
-    $tier2List = [System.Collections.ArrayList]@()
-    $tier3List = [System.Collections.ArrayList]@()
-    $tier4List = [System.Collections.ArrayList]@()
-    $tier5List = [System.Collections.ArrayList]@()
-    
-    $allVariations = [System.Collections.Generic.HashSet[string]]::new()
-    $words = $SoftwareName.Split(" ", [StringSplitOptions]::RemoveEmptyEntries)
-    
-    # Helper function to add variation
-    function Add-Variation {
-        param([string]$value, [System.Collections.ArrayList]$list)
-        if ($value -and $value.Trim().Length -gt 1 -and $value -notmatch "^\d+$") {
-            if ($allVariations.Add($value)) {
-                [void]$list.Add($value)
-            }
+    try {
+        $body = @{
+            software = $SoftwareName
+            version = $Version
+        } | ConvertTo-Json
+        return Invoke-RestMethod `
+            -Uri "$($ApiUrl.TrimEnd('/'))/api/resolve" `
+            -Method Post `
+            -ContentType "application/json" `
+            -Body $body `
+            -TimeoutSec 10
+    }
+    catch {
+        return [PSCustomObject]@{
+            error = $_.Exception.Message
+            matched_cpe = $null
+            results = @()
         }
     }
-    
-    # TIER 1: FULL NAME VARIATIONS
-    Add-Variation $SoftwareName $tier1List
-    Add-Variation $SoftwareName.ToLower() $tier1List
-    
-    if ($Version -match "^(\d+)") {
-        Add-Variation "$SoftwareName $($Matches[1])" $tier1List
-        Add-Variation (($SoftwareName.ToLower()) + " $($Matches[1])") $tier1List
-    }
-    
-    # TIER 2: CLEANED VARIATIONS
-    $step1 = $SoftwareName -replace "\s*\(.*?(x64|x86|32-bit|64-bit|arm64|arm|amd64).*?\)", ""
-    $step1 = $step1 -replace "\s*(-|_)*(x64|x86|32-bit|64-bit|arm64|arm|amd64)$", ""
-    
-    $step2 = $SoftwareName -replace "\s*\([^)]*(?:Preview|ESR|Beta|RC|Alpha|Pre-release|Community|Enterprise|Professional)[^)]*\)", ""
-    $step3 = $SoftwareName -replace "\s*\([^)]*\)", ""
-    
-    foreach ($step in @($step1, $step2, $step3)) {
-        if ($step -and $step.Trim()) {
-            Add-Variation $step.Trim() $tier2List
-            Add-Variation $step.Trim().ToLower() $tier2List
-        }
-    }
-    
-    # TIER 3: TWO-WORD VARIATIONS
-    if ($words.Count -ge 2) {
-        $twoWords = ($words[0..1] -join " ")
-        Add-Variation $twoWords $tier3List
-        Add-Variation $twoWords.ToLower() $tier3List
-    }
-    
-    # TIER 4: COMPRESSED VARIATIONS
-    $compressed1 = $SoftwareName -replace " ", ""
-    $compressed2 = $SoftwareName -replace "[^a-zA-Z0-9]", "_"
-    $compressed3 = $SoftwareName -replace "[^a-zA-Z0-9]", ""
-    
-    foreach ($variant in @($compressed1, $compressed2, $compressed3)) {
-        Add-Variation $variant $tier4List
-        Add-Variation $variant.ToLower() $tier4List
-    }
-    
-    # TIER 5: TWO-WORD COMBINED
-    if ($words.Count -ge 2) {
-        $twoWordsCombined = $words[0] + $words[1]
-        Add-Variation $twoWordsCombined.ToLower() $tier5List
-        
-        $twoWordsCombinedTitle = ([cultureinfo]::CurrentCulture.TextInfo.ToTitleCase($words[0])) + `
-                                  ([cultureinfo]::CurrentCulture.TextInfo.ToTitleCase($words[1]))
-        Add-Variation $twoWordsCombinedTitle $tier5List
-    }
-	
-	if ($words.Count -ge 2) {
-        Add-Variation $words[1] $tier5List
-        Add-Variation $words[1].ToLower() $tier5List
-    }
-    
-    if ($words.Count -ge 1) {
-        Add-Variation $words[0] $tier5List
-        Add-Variation $words[0].ToLower() $tier5List
-    }
-        
-    return @{
-        tier1 = @($tier1List)
-        tier2 = @($tier2List)
-        tier3 = @($tier3List)
-        tier4 = @($tier4List)
-        tier5 = @($tier5List)
-    }
-}
-
-function Get-CVESFromAPI {
-    param(
-        [string]$SoftwareName,
-        [string]$Version
-    )
-    
-    $nameVariationsByTier = Get-ProductNameVariations -SoftwareName $SoftwareName -Version $Version
-    
-    if ($DebugMatching) {
-        Write-Host "DEBUG - Name variations for '$SoftwareName':" -ForegroundColor DarkCyan
-        foreach ($tier in @('tier1', 'tier2', 'tier3', 'tier4', 'tier5')) {
-            if ($nameVariationsByTier[$tier].Count -gt 0) {
-                Write-Host "  ${tier}:" -ForegroundColor DarkGray
-                $nameVariationsByTier[$tier] | ForEach-Object {
-                    Write-Host "    → $_" -ForegroundColor DarkGray
-                }
-            }
-        }
-    }
-    
-    foreach ($tier in @('tier1', 'tier2', 'tier3', 'tier4', 'tier5')) {
-        foreach ($name in $nameVariationsByTier[$tier]) {
-            try {
-                $uri = "$ApiUrl/api/cve/search?software=$([Uri]::EscapeDataString($name))"
-                if ($Version) { $uri += "&version=$([Uri]::EscapeDataString($Version))" }
-                
-                $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 10 -ErrorAction SilentlyContinue
-                
-                if ($response.results.Count -gt 0) {
-                    if ($DebugMatching) { 
-                        Write-Host "✨ Matched API using: '$name' (from ${tier})" -ForegroundColor DarkGray
-                    }
-                    return @{ 
-                        results = @($response.results)
-                        matchedVariation = $name
-                        matchedTier = $tier
-                    }
-                }
-            }
-            catch {}
-        }
-    }
-    
-    return $null
 }
 
 function Get-CVSSSeverity {
@@ -218,17 +100,19 @@ function Format-CVETable {
     }
 }
 
+if ($MyInvocation.InvocationName -eq '.') { return }
+
 Write-Host "`n═════════════════════════════════════════" -ForegroundColor Cyan
 Write-Host "                CVEWatchdog                "
 Write-Host "═════════════════════════════════════════`n" -ForegroundColor Cyan
 
 Write-Host "🌐 Checking API connectivity..." -ForegroundColor Cyan
 try {
-    $health = Invoke-RestMethod -Uri "$ApiUrl/health" -Method Get -TimeoutSec 5
+    $health = Invoke-RestMethod -Uri "$($ApiUrl.TrimEnd('/'))/health" -Method Get -TimeoutSec 5
     Write-Host "✅ API connected - $($health.cves_indexed) CVEs indexed`n" -ForegroundColor Green
 }
 catch {
-    Write-Host "❌ Cannot connect to API at $ApiUrl" -ForegroundColor Red
+    Write-Host "❌ Cannot connect to API at ${ApiUrl}: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }
 
@@ -241,18 +125,23 @@ Write-Host "`n🔍 Searching for vulnerabilities...`n" -ForegroundColor Cyan
 $softwareWithCVEs = @()
 $allCVEs = @()
 $apiMatches = 0
+$apiErrors = 0
 
 foreach ($app in $software) {
-    $cveResult = Get-CVESFromAPI -SoftwareName $app.Name -Version $app.Version
-    $cves = $null
-    
-    if ($cveResult) {
-        $cves = $cveResult.results
-        $apiMatches++
+    $cveResult = Resolve-Software -SoftwareName $app.Name -Version $app.Version
+    $cves = @($cveResult.results)
+
+    if ($cveResult.error) {
+        $apiErrors++
+        Write-Host "✗ $($app.Name) ($($app.Version)) - API error: $($cveResult.error)" -ForegroundColor Red
+        continue
     }
 
-    if (-not $Wildcards -and $cves) {
-        $cves = $cves | Where-Object { $_.version -ne "*" }
+    if ($cveResult.matched_cpe) {
+        $apiMatches++
+        if ($DebugMatching) {
+            Write-Host "↳ $($app.Name): $($cveResult.matched_cpe.cpe) (confidence $([math]::Round($cveResult.matched_cpe.score, 2)))" -ForegroundColor DarkGray
+        }
     }
 
     if ($cves) {
@@ -261,13 +150,17 @@ foreach ($app in $software) {
         $softwareWithCVEs += [PSCustomObject]@{
             Name    = $app.Name
             Version = $app.Version
+            CPE     = $cveResult.matched_cpe.cpe
             CVEs    = $cves
         }
 
         $allCVEs += $cves
     }
     else {
-        if ($DebugMatching) {
+        if ($DebugMatching -and -not $cveResult.matched_cpe) {
+            Write-Host "? $($app.Name) ($($app.Version)) - Software not resolved" -ForegroundColor DarkGray
+        }
+        elseif ($DebugMatching) {
             Write-Host "✓ $($app.Name) ($($app.Version)) - No CVEs detected" -ForegroundColor Green
         }
     }
@@ -283,6 +176,7 @@ if ($softwareWithCVEs.Count -eq 0) {
 else {
     foreach ($app in $softwareWithCVEs) {
         Write-Host "`n📌 $($app.Name) - Version: $($app.Version)" -ForegroundColor Magenta
+        Write-Host "   CPE: $($app.CPE)" -ForegroundColor DarkGray
         Write-Host ("─" * 100)
 
         Format-CVETable -CVEs $app.CVEs | Format-Table -AutoSize
@@ -302,7 +196,8 @@ $unknownCount  = ($allCVEs | Where-Object { (Get-CVSSSeverity -Score $_.cvss_sco
 
 Write-Host "Software scanned        : $($software.Count)"
 Write-Host "Software ignored        : $ignoredCount"
-Write-Host "API matches found       : $apiMatches"
+Write-Host "Software resolved       : $apiMatches"
+Write-Host "API errors              : $apiErrors"
 Write-Host ""
 Write-Host "Total CVEs found        : $totalCVEs" -ForegroundColor Cyan
 Write-Host "Critical vulnerabilities: $criticalCount" -ForegroundColor Black
