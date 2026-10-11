@@ -174,7 +174,11 @@ def classify_vulnerability(description):
         text,
     ))
     local = any(term in text for term in ("local attacker", "local user", "local users", "locally"))
-    if privilege and local:
+    explicit_lpe = any(term in text for term in (
+        "local privilege escalation", "local privilege elevation",
+        "local escalation of privilege", "local elevation of privilege",
+    ))
+    if explicit_lpe or (privilege and local):
         types.append(("lpe", "LPE"))
     elif privilege:
         types.append(("privilege-escalation", "Privilege escalation"))
@@ -494,6 +498,22 @@ details summary{{color:#a5f3fc;cursor:pointer;white-space:nowrap}} details ul{{m
 .empty-state{{padding:36px;text-align:center;color:var(--muted)}} footer{{padding-top:24px;color:#66758a;text-align:center;font-size:12px}}
 @media(max-width:900px){{main{{padding:20px 14px 40px}} .hero{{align-items:flex-start;padding:22px;flex-direction:column}} .risk-card{{width:100%;text-align:left}} .cards{{grid-template-columns:repeat(2,1fr)}} .filter-panel{{position:static}} .filters{{grid-template-columns:1fr}}}}
 @media(max-width:560px){{.mark{{display:none}} .panel-title{{align-items:flex-start;flex-direction:column}} .software-list{{grid-template-columns:minmax(130px,1fr) auto}} .software-cve-count{{display:none}} .cards{{grid-template-columns:1fr 1fr}} .metric-card{{padding:14px}}}}
+:root{{--apple-radius:22px;--apple-shadow:0 22px 60px rgba(0,0,0,.5);--bg:#000;--panel:#111113;--panel-2:#171719;--text:#f5f5f7;--muted:#a1a1a6;--border:#2c2c2e;--accent:#2997ff;--accent-soft:#10263d;--critical:#ff453a;--high:#ff9f0a;--medium:#ffd60a;--low:#30d158}}
+body{{background:radial-gradient(circle at 50% -10%,#182a48 0,transparent 32%),#000;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text",Inter,system-ui,sans-serif;letter-spacing:-.005em}}
+main{{max-width:1440px;padding:28px 28px 72px}}
+.hero{{min-height:178px;padding:34px 38px;border:1px solid #303036;border-radius:30px;background:linear-gradient(135deg,#171719,#08080a);box-shadow:var(--apple-shadow)}}
+.mark{{width:64px;height:64px;border:0;border-radius:19px;background:linear-gradient(145deg,#5ac8fa,#0a84ff);font-size:19px;letter-spacing:-.06em;box-shadow:0 0 40px rgba(10,132,255,.32)}}
+.eyebrow{{color:#64d2ff;font-size:12px;letter-spacing:.08em;text-transform:none}} h1{{font-size:42px;font-weight:720;letter-spacing:-.045em}} .subtitle{{font-size:16px;letter-spacing:-.015em}}
+.risk-card{{padding:16px 20px;border-color:#38383d;border-radius:18px;background:#0b0b0d}}
+.panel,.report-section,.empty-state{{border-color:#29292d;border-radius:var(--apple-radius);background:linear-gradient(180deg,#18181b,#101012);box-shadow:var(--apple-shadow)}}
+.panel{{padding:24px 26px}} .panel-title h2,.section-heading h2{{font-size:21px;letter-spacing:-.025em}}
+button{{padding:8px 14px;border-color:#3a3a3c;border-radius:999px;background:#1c1c1e;color:#f5f5f7;font-weight:590;transition:transform .18s ease,background .18s ease,border-color .18s ease}} button:hover{{border-color:#0a84ff;background:#202b38;transform:scale(1.025)}} button:active{{transform:scale(.98)}}
+.software-list{{max-height:300px;padding-right:20px;scrollbar-width:thin;scrollbar-color:#48484a transparent}} .software-list::-webkit-scrollbar{{width:8px}} .software-list::-webkit-scrollbar-track{{margin:8px 0;background:transparent}} .software-list::-webkit-scrollbar-thumb{{border:2px solid transparent;background:#48484a;background-clip:padding-box}} .software-list>*{{border-color:#29292d}}
+.cards{{gap:14px}} .metric-card{{min-height:108px;padding:19px 21px;border-color:#29292d;border-radius:20px;background:linear-gradient(180deg,#18181b,#101012)}} .metric-card::before{{inset:auto 20px 14px;width:34px;height:3px;border-radius:4px}} .metric-card strong{{font-size:30px;letter-spacing:-.035em}}
+.filter-panel{{top:10px;padding:19px 22px;border-radius:22px;background:rgba(18,18,20,.86);backdrop-filter:blur(24px) saturate(160%)}} .filter-head strong{{font-size:17px}} .filters{{gap:14px}} .filters input,.filters select{{min-height:45px;border-color:#3a3a3c;border-radius:13px;background:#1c1c1e;color:#fff}}
+.section-heading{{padding:22px 24px}} .table-wrap{{border-radius:0 0 var(--apple-radius) var(--apple-radius)}} table{{font-size:13px}} th{{padding:12px 14px;border-color:#2c2c2e;background:#0b0b0d;color:#98989d;font-size:10px;letter-spacing:.055em}} td{{padding:14px;border-color:#252529;line-height:1.48}} .cve-id{{color:#64d2ff}}
+.severity,.type-chip,.cwe-chip,.intel-chip,#visible-count,.section-count{{border-radius:999px}} .type-chip{{background:#2c2c2e;color:#e5e5ea}} .cwe-chip{{background:#102d46;color:#64d2ff}}
+@media(max-width:900px){{main{{padding:16px 12px 44px}} .hero{{min-height:auto;padding:26px}} .hero h1{{font-size:34px}} .filter-panel{{position:static}}}}
 </style></head><body><main><header class="hero"><div class="brand"><div class="mark">CV</div><div><p class="eyebrow">Local vulnerability assessment</p><h1>CVEWatchdog</h1><p class="subtitle">Version-confirmed vulnerability report</p></div></div><div class="risk-card"><span>Overall risk</span><strong>{html.escape(summary["risk_level"])}</strong></div></header>
 <section class="panel software-summary"><div class="panel-title"><div><h2>Vulnerable software</h2><p>Select the applications to include in the report.</p></div><div class="actions"><button type="button" id="software-all">Select all</button><button type="button" id="software-none">Select none</button></div></div><div class="software-list">{"".join(software_choices) or "No vulnerable software"}</div></section>
 <div class="cards">{cards}</div>

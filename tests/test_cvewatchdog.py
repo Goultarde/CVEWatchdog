@@ -138,6 +138,9 @@ Packager        : Arch Linux
         self.assertIn('class="hero"', document)
         self.assertIn('class="panel filter-panel"', document)
         self.assertIn("function filterReport()", document)
+        self.assertIn("--apple-radius:22px", document)
+        self.assertIn("font-family:-apple-system", document)
+        self.assertIn("background:linear-gradient(135deg,#171719,#08080a)", document)
 
     @patch.object(cvewatchdog.subprocess, "run")
     def test_sploitscan_results_are_indexed_by_cve(self, run):
@@ -192,6 +195,12 @@ Packager        : Arch Linux
     def test_vulnerability_type_classification_is_conservative(self):
         self.assertIn(("lpe", "LPE"), cvewatchdog.classify_vulnerability(
             "A local attacker can elevate their privileges."
+        ))
+        self.assertIn(("lpe", "LPE"), cvewatchdog.classify_vulnerability(
+            "A local privilege escalation vulnerability exists in NSClient++ 0.5.2.35."
+        ))
+        self.assertIn(("lpe", "LPE"), cvewatchdog.classify_vulnerability(
+            "This is a local elevation of privilege vulnerability."
         ))
         self.assertIn(("rce", "RCE"), cvewatchdog.classify_vulnerability(
             "This allows remote code execution."
