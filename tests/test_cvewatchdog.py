@@ -92,7 +92,7 @@ Packager        : Arch Linux
                 "cvss_score": 9.8,
                 "version": "<2.0",
                 "published": "2026-01-01T00:00:00Z",
-                "description": "<img src=x onerror=alert(1)>",
+                "description": "A local attacker can gain elevated privileges. <img src=x onerror=alert(1)>",
             }],
         }]
         summary = {
@@ -118,8 +118,26 @@ Packager        : Arch Linux
         self.assertNotIn("<img src=x", document)
         self.assertIn('id="report-search"', document)
         self.assertIn('id="severity-filter"', document)
+        self.assertIn('id="type-filter"', document)
+        self.assertIn('class="software-choice"', document)
+        self.assertIn('data-software="software-0"', document)
+        self.assertIn("Vulnerable software", document)
+        self.assertIn("(1 CVEs)", document)
         self.assertIn('data-severity="critical"', document)
+        self.assertIn('data-types="lpe"', document)
+        self.assertIn(">LPE</td>", document)
         self.assertIn("function filterReport()", document)
+
+    def test_vulnerability_type_classification_is_conservative(self):
+        self.assertIn(("lpe", "LPE"), cvewatchdog.classify_vulnerability(
+            "A local attacker can elevate their privileges."
+        ))
+        self.assertIn(("rce", "RCE"), cvewatchdog.classify_vulnerability(
+            "This allows remote code execution."
+        ))
+        self.assertEqual([("other", "Other")], cvewatchdog.classify_vulnerability(
+            "An attacker can modify application settings."
+        ))
 
 
 if __name__ == "__main__":

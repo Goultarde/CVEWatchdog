@@ -1,6 +1,7 @@
 import argparse
 import html
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -158,6 +159,36 @@ def get_cvss_severity(score):
         return "Low"
     return "None"
 
+def classify_vulnerability(description):
+    """Infer broad vulnerability types from the NVD description."""
+    text = description.casefold()
+    types = []
+    privilege = bool(re.search(
+        r"(?:escalat|elevat|gain|obtain)\w*(?:\s+\w+){0,3}\s+privileg|"
+        r"gain(?:\s+\w+){0,2}\s+root|root privileg",
+        text,
+    ))
+    local = any(term in text for term in ("local attacker", "local user", "local users", "locally"))
+    if privilege and local:
+        types.append(("lpe", "LPE"))
+    elif privilege:
+        types.append(("privilege-escalation", "Privilege escalation"))
+    if any(term in text for term in ("remote code execution", "remotely execute arbitrary code", "execute arbitrary code remotely")):
+        types.append(("rce", "RCE"))
+    if any(term in text for term in ("denial of service", "denial-of-service")):
+        types.append(("dos", "DoS"))
+    if any(term in text for term in ("information disclosure", "information leak", "sensitive information")):
+        types.append(("information-disclosure", "Information disclosure"))
+    if any(term in text for term in ("authentication bypass", "bypass authentication")):
+        types.append(("authentication-bypass", "Authentication bypass"))
+    if "cross-site scripting" in text or " xss " in f" {text} ":
+        types.append(("xss", "XSS"))
+    if "sql injection" in text:
+        types.append(("sql-injection", "SQL injection"))
+    if any(term in text for term in ("path traversal", "directory traversal")):
+        types.append(("path-traversal", "Path traversal"))
+    return types or [("other", "Other")]
+
 def format_cve_table(cves):
     """Format CVE data as a table"""
     if not cves:
@@ -192,24 +223,35 @@ def format_cve_table(cves):
 def write_html_report(path, software_with_cves, summary):
     """Write a standalone, escaped HTML vulnerability report."""
     sections = []
-    for app in software_with_cves:
+    software_choices = []
+    for index, app in enumerate(software_with_cves):
+        software_id = f"software-{index}"
+        software_choices.append(
+            f'<label><input class="software-choice" type="checkbox" value="{software_id}" checked> '
+            f'<span>{html.escape(app["name"])} {html.escape(app["version"])} '
+            f'({len(app["cves"])} CVEs)</span></label>'
+            f'<button type="button" data-only="{software_id}">Only</button>'
+        )
         rows = []
         for cve in app["cves"]:
             severity = get_cvss_severity(cve.get("cvss_score"))
             score = cve.get("cvss_score")
+            vulnerability_types = classify_vulnerability(str(cve.get("description", "")))
             rows.append(
-                f'<tr data-severity="{severity.lower()}"><td>{html.escape(str(cve.get("cve_id", "")))}</td>'
+                f'<tr data-severity="{severity.lower()}" data-types="{" ".join(value for value, _ in vulnerability_types)}">'
+                f'<td>{html.escape(str(cve.get("cve_id", "")))}</td>'
                 f'<td><span class="severity {severity.lower()}">{severity}</span></td>'
+                f'<td>{html.escape(", ".join(label for _, label in vulnerability_types))}</td>'
                 f'<td>{html.escape(str(score if score is not None else "N/A"))}</td>'
                 f'<td>{html.escape(str(cve.get("version", "")))}</td>'
                 f'<td>{html.escape(str(cve.get("published", "")).split("T")[0])}</td>'
                 f'<td>{html.escape(str(cve.get("description", "")))}</td></tr>'
             )
         sections.append(
-            f'<section class="report-section"><h2>{html.escape(app["name"])} '
+            f'<section class="report-section" data-software="{software_id}"><h2>{html.escape(app["name"])} '
             f'<small>{html.escape(app["version"])}</small></h2>'
             f'<p class="cpe">{html.escape(app["cpe"])}</p>'
-            '<div class="table-wrap"><table><thead><tr><th>CVE</th><th>Severity</th>'
+            '<div class="table-wrap"><table><thead><tr><th>CVE</th><th>Severity</th><th>Type</th>'
             '<th>CVSS</th><th>Affected version</th><th>Published</th><th>Description</th>'
             f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div></section>'
         )
@@ -235,18 +277,22 @@ def write_html_report(path, software_with_cves, summary):
 main{{max-width:1400px;margin:auto;padding:32px}} h1{{margin-bottom:4px}} h2{{margin-top:0}} small,.cpe{{color:var(--muted)}}
 .risk{{font-size:18px;font-weight:700}} .cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:24px 0}}
 .card,section{{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}} .card span{{display:block;font-size:24px;margin-top:8px}}
-.filters{{display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin:24px 0}} label{{display:grid;gap:6px;color:var(--muted)}} input,select{{min-width:220px;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text)}}
+.filters{{display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin:24px 0}} .filters label{{display:grid;gap:6px;color:var(--muted)}} .filters input,.filters select{{min-width:220px;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text)}}
+.software-list{{display:grid;grid-template-columns:1fr auto;gap:8px 12px;align-items:center;max-height:300px;overflow:auto;margin-top:12px}} .software-list label{{display:flex;gap:8px;align-items:center}} button{{padding:5px 10px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--text);cursor:pointer}}
 section{{margin:16px 0}} .table-wrap{{overflow:auto}} table{{width:100%;border-collapse:collapse}} th,td{{padding:9px;text-align:left;border-top:1px solid var(--border);vertical-align:top}}
 .severity{{font-weight:700}} .critical{{color:#ff5c7a}} .high{{color:#ff8c69}} .medium{{color:#ffd166}} .low{{color:#72d6a0}} .unknown{{color:var(--muted)}}
 </style></head><body><main><h1>CVEWatchdog report</h1><p class="risk">{html.escape(summary["risk_level"])}</p>
+<section class="software-summary"><h2>Vulnerable software</h2><button type="button" id="software-all">Select all</button> <button type="button" id="software-none">Select none</button><div class="software-list">{"".join(software_choices) or "None"}</div></section>
 <div class="cards">{cards}</div>
 <div class="filters"><label>Search<input id="report-search" type="search" placeholder="Software, CPE, CVE, description"></label>
 <label>Severity<select id="severity-filter"><option value="">All severities</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option><option value="unknown">Unknown</option></select></label>
+<label>Vulnerability type<select id="type-filter"><option value="">All types</option><option value="lpe">LPE</option><option value="rce">RCE</option><option value="privilege-escalation">Privilege escalation</option><option value="dos">DoS</option><option value="information-disclosure">Information disclosure</option><option value="authentication-bypass">Authentication bypass</option><option value="xss">XSS</option><option value="sql-injection">SQL injection</option><option value="path-traversal">Path traversal</option><option value="other">Other</option></select></label>
 <span id="visible-count"></span></div>{"".join(sections) or '<section><h2>No version-confirmed vulnerabilities found</h2></section>'}
 </main><script>
-const search=document.getElementById('report-search'), severity=document.getElementById('severity-filter'), count=document.getElementById('visible-count');
-function filterReport(){{let visible=0,query=search.value.trim().toLowerCase();document.querySelectorAll('.report-section').forEach(section=>{{let sectionRows=0,context=(section.querySelector('h2').textContent+' '+section.querySelector('.cpe').textContent).toLowerCase();section.querySelectorAll('tbody tr').forEach(row=>{{let show=(!query||(context+' '+row.textContent).toLowerCase().includes(query))&&(!severity.value||row.dataset.severity===severity.value);row.hidden=!show;if(show){{visible++;sectionRows++;}}}});section.hidden=sectionRows===0;}});count.textContent=visible+' CVE shown';}}
-search.addEventListener('input',filterReport);severity.addEventListener('change',filterReport);filterReport();
+const search=document.getElementById('report-search'), severity=document.getElementById('severity-filter'), type=document.getElementById('type-filter'), count=document.getElementById('visible-count'), software=[...document.querySelectorAll('.software-choice')];
+function filterReport(){{let visible=0,query=search.value.trim().toLowerCase(),selected=new Set(software.filter(choice=>choice.checked).map(choice=>choice.value));document.querySelectorAll('.report-section').forEach(section=>{{let sectionRows=0,context=(section.querySelector('h2').textContent+' '+section.querySelector('.cpe').textContent).toLowerCase();section.querySelectorAll('tbody tr').forEach(row=>{{let show=selected.has(section.dataset.software)&&(!query||(context+' '+row.textContent).toLowerCase().includes(query))&&(!severity.value||row.dataset.severity===severity.value)&&(!type.value||row.dataset.types.split(' ').includes(type.value));row.hidden=!show;if(show){{visible++;sectionRows++;}}}});section.hidden=sectionRows===0;}});count.textContent=visible+' CVE shown';}}
+search.addEventListener('input',filterReport);severity.addEventListener('change',filterReport);type.addEventListener('change',filterReport);software.forEach(choice=>choice.addEventListener('change',filterReport));
+document.getElementById('software-all').addEventListener('click',()=>{{software.forEach(choice=>choice.checked=true);filterReport();}});document.getElementById('software-none').addEventListener('click',()=>{{software.forEach(choice=>choice.checked=false);filterReport();}});document.querySelectorAll('[data-only]').forEach(button=>button.addEventListener('click',()=>{{software.forEach(choice=>choice.checked=choice.value===button.dataset.only);filterReport();}}));filterReport();
 </script></body></html>"""
     report_path = Path(path).expanduser()
     report_path.parent.mkdir(parents=True, exist_ok=True)
