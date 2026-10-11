@@ -137,6 +137,9 @@ Packager        : Arch Linux
         self.assertIn(("rce", "RCE"), cvewatchdog.classify_vulnerability(
             "This allows remote code execution."
         ))
+        self.assertIn(("rce", "RCE"), cvewatchdog.classify_vulnerability(
+            "A remote attacker leveraging social engineering could potentially execute arbitrary code outside the sandbox."
+        ))
         self.assertEqual([("other", "Other")], cvewatchdog.classify_vulnerability(
             "An attacker can modify application settings."
         ))

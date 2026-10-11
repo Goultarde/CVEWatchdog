@@ -173,7 +173,13 @@ def classify_vulnerability(description):
         types.append(("lpe", "LPE"))
     elif privilege:
         types.append(("privilege-escalation", "Privilege escalation"))
-    if any(term in text for term in ("remote code execution", "remotely execute arbitrary code", "execute arbitrary code remotely")):
+    remote = any(term in text for term in (
+        "remote attacker", "remote attackers", "remote user", "network attacker", "remotely",
+    ))
+    code_execution = any(term in text for term in (
+        "execute arbitrary code", "execution of arbitrary code", "arbitrary code execution",
+    ))
+    if "remote code execution" in text or (remote and code_execution):
         types.append(("rce", "RCE"))
     if any(term in text for term in ("denial of service", "denial-of-service")):
         types.append(("dos", "DoS"))
