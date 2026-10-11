@@ -141,6 +141,11 @@ Packager        : Arch Linux
         self.assertIn("--apple-radius:22px", document)
         self.assertIn("font-family:-apple-system", document)
         self.assertIn("background:linear-gradient(135deg,#171719,#08080a)", document)
+        self.assertIn("radial-gradient(900px 500px", document)
+        self.assertIn("background-attachment:fixed", document)
+        self.assertIn("transition:transform .18s ease", document)
+        self.assertIn("transform:scale(1.025)", document)
+        self.assertNotIn("scroll-behavior:smooth", document)
 
     @patch.object(cvewatchdog.subprocess, "run")
     def test_sploitscan_results_are_indexed_by_cve(self, run):
