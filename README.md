@@ -10,7 +10,7 @@
 - **Detailed CVE reports** with CVSS scores and severity levels
 - **Explicit unresolved/API-error reporting** in debug mode
 - **Comprehensive summary** with overall risk assessment
-- **Standalone HTML reports** for sharing and archiving scan results
+- **Standalone filterable HTML reports** for sharing and archiving scan results
 - **Cross-platform support** (Windows & Linux)
 
 ## 📋 Requirements
@@ -111,6 +111,8 @@ cvewatchdog http://<IP_DU_SERVEUR>:8001
 # Generate a standalone HTML report
 cvewatchdog http://localhost:8001 --html-report cvewatchdog-report.html
 ```
+
+The HTML report can be filtered locally by software, CPE, CVE, description, or severity.
 
 ## 📊 Output
 

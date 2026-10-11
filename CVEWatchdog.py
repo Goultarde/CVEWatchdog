@@ -198,7 +198,7 @@ def write_html_report(path, software_with_cves, summary):
             severity = get_cvss_severity(cve.get("cvss_score"))
             score = cve.get("cvss_score")
             rows.append(
-                f'<tr><td>{html.escape(str(cve.get("cve_id", "")))}</td>'
+                f'<tr data-severity="{severity.lower()}"><td>{html.escape(str(cve.get("cve_id", "")))}</td>'
                 f'<td><span class="severity {severity.lower()}">{severity}</span></td>'
                 f'<td>{html.escape(str(score if score is not None else "N/A"))}</td>'
                 f'<td>{html.escape(str(cve.get("version", "")))}</td>'
@@ -206,7 +206,7 @@ def write_html_report(path, software_with_cves, summary):
                 f'<td>{html.escape(str(cve.get("description", "")))}</td></tr>'
             )
         sections.append(
-            f'<section><h2>{html.escape(app["name"])} '
+            f'<section class="report-section"><h2>{html.escape(app["name"])} '
             f'<small>{html.escape(app["version"])}</small></h2>'
             f'<p class="cpe">{html.escape(app["cpe"])}</p>'
             '<div class="table-wrap"><table><thead><tr><th>CVE</th><th>Severity</th>'
@@ -235,11 +235,19 @@ def write_html_report(path, software_with_cves, summary):
 main{{max-width:1400px;margin:auto;padding:32px}} h1{{margin-bottom:4px}} h2{{margin-top:0}} small,.cpe{{color:var(--muted)}}
 .risk{{font-size:18px;font-weight:700}} .cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:24px 0}}
 .card,section{{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}} .card span{{display:block;font-size:24px;margin-top:8px}}
+.filters{{display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin:24px 0}} label{{display:grid;gap:6px;color:var(--muted)}} input,select{{min-width:220px;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text)}}
 section{{margin:16px 0}} .table-wrap{{overflow:auto}} table{{width:100%;border-collapse:collapse}} th,td{{padding:9px;text-align:left;border-top:1px solid var(--border);vertical-align:top}}
 .severity{{font-weight:700}} .critical{{color:#ff5c7a}} .high{{color:#ff8c69}} .medium{{color:#ffd166}} .low{{color:#72d6a0}} .unknown{{color:var(--muted)}}
 </style></head><body><main><h1>CVEWatchdog report</h1><p class="risk">{html.escape(summary["risk_level"])}</p>
-<div class="cards">{cards}</div>{"".join(sections) or '<section><h2>No version-confirmed vulnerabilities found</h2></section>'}
-</main></body></html>"""
+<div class="cards">{cards}</div>
+<div class="filters"><label>Search<input id="report-search" type="search" placeholder="Software, CPE, CVE, description"></label>
+<label>Severity<select id="severity-filter"><option value="">All severities</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option><option value="unknown">Unknown</option></select></label>
+<span id="visible-count"></span></div>{"".join(sections) or '<section><h2>No version-confirmed vulnerabilities found</h2></section>'}
+</main><script>
+const search=document.getElementById('report-search'), severity=document.getElementById('severity-filter'), count=document.getElementById('visible-count');
+function filterReport(){{let visible=0,query=search.value.trim().toLowerCase();document.querySelectorAll('.report-section').forEach(section=>{{let sectionRows=0,context=(section.querySelector('h2').textContent+' '+section.querySelector('.cpe').textContent).toLowerCase();section.querySelectorAll('tbody tr').forEach(row=>{{let show=(!query||(context+' '+row.textContent).toLowerCase().includes(query))&&(!severity.value||row.dataset.severity===severity.value);row.hidden=!show;if(show){{visible++;sectionRows++;}}}});section.hidden=sectionRows===0;}});count.textContent=visible+' CVE shown';}}
+search.addEventListener('input',filterReport);severity.addEventListener('change',filterReport);filterReport();
+</script></body></html>"""
     report_path = Path(path).expanduser()
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(document, encoding="utf-8")

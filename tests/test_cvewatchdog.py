@@ -116,6 +116,10 @@ Packager        : Arch Linux
         self.assertIn("CVE-2026-0001", document)
         self.assertIn("&lt;script&gt;", document)
         self.assertNotIn("<img src=x", document)
+        self.assertIn('id="report-search"', document)
+        self.assertIn('id="severity-filter"', document)
+        self.assertIn('data-severity="critical"', document)
+        self.assertIn("function filterReport()", document)
 
 
 if __name__ == "__main__":
