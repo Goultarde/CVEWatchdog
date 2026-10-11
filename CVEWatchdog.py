@@ -10,6 +10,8 @@ CVSS_LEVELS = {
     "Low": 0.1
 }
 
+PLATFORM = "windows" if sys.platform.startswith("win") else "macos" if sys.platform == "darwin" else "linux"
+
 # ANSI color codes
 class Colors:
     CYAN = '\033[96m'
@@ -23,9 +25,26 @@ class Colors:
     BOLD = '\033[1m'
 
 class Software:
-    def __init__(self, name, version):
+    def __init__(self, name, version, context=""):
         self.name = name
         self.version = version
+        self.context = context
+
+def parse_pacman_inventory(output):
+    software = []
+    for record in output.split("\n\n"):
+        fields = {}
+        for line in record.splitlines():
+            if ":" in line and not line.startswith(" "):
+                key, value = line.split(":", 1)
+                fields[key.strip()] = value.strip()
+        if fields.get("Name") and fields.get("Version"):
+            version = fields["Version"].split(":", 1)[-1].split("-", 1)[0]
+            context = " ".join(
+                fields.get(key, "") for key in ("Description", "URL", "Packager")
+            )
+            software.append(Software(fields["Name"], version, context))
+    return software
 
 def get_installed_software():
     """Scan installed software packages on Linux"""
@@ -36,9 +55,9 @@ def get_installed_software():
     
     # Try different package managers
     package_managers = [
-        ("dpkg", ["dpkg-query", "-W", "-f=${Package}\t${Version}\n"]),
-        ("rpm", ["rpm", "-qa", "--queryformat", "%{NAME}\t%{VERSION}\n"]),
-        ("pacman", ["pacman", "-Q"]),
+        ("dpkg", ["dpkg-query", "-W", "-f=${Package}\t${Version}\t${Maintainer}\t${Homepage}\n"]),
+        ("rpm", ["rpm", "-qa", "--queryformat", "%{NAME}\t%{VERSION}\t%{VENDOR}\t%{URL}\n"]),
+        ("pacman", ["pacman", "-Qi"]),
         ("apk", ["apk", "info", "-v"])
     ]
     
@@ -52,6 +71,12 @@ def get_installed_software():
             )
             
             if result.returncode == 0:
+                if pm_name == "pacman":
+                    software = parse_pacman_inventory(result.stdout)
+                    print(f"{Colors.GREEN}✅ Found {len(software)} packages using pacman "
+                          f"(ignoring {ignored} system packages){Colors.RESET}")
+                    return software, ignored
+
                 lines = result.stdout.strip().split('\n')
                 
                 for line in lines:
@@ -81,7 +106,11 @@ def get_installed_software():
                             ignored += 1
                             continue
                         
-                        software.append(Software(name=name, version=version))
+                        software.append(Software(
+                            name=name,
+                            version=version,
+                            context=" ".join(parts[2:]),
+                        ))
                 
                 print(f"{Colors.GREEN}✅ Found {len(software)} packages using {pm_name} "
                       f"(ignoring {ignored} system packages){Colors.RESET}")
@@ -93,11 +122,16 @@ def get_installed_software():
     print(f"{Colors.RED}❌ No supported package manager found (dpkg, rpm, pacman, apk){Colors.RESET}")
     sys.exit(1)
 
-def resolve_software(api_url, software_name, version):
+def resolve_software(api_url, software_name, version, context=""):
     """Resolve software to a CPE and applicable CVEs through FastCVE-API."""
     response = requests.post(
         f"{api_url.rstrip('/')}/api/resolve",
-        json={"software": software_name, "version": version},
+        json={
+            "software": software_name,
+            "version": version,
+            "context": context,
+            "platform": PLATFORM,
+        },
         timeout=10,
     )
     response.raise_for_status()
@@ -191,7 +225,7 @@ def main():
     
     for app in software_list:
         try:
-            cve_result = resolve_software(args.api_url, app.name, app.version)
+            cve_result = resolve_software(args.api_url, app.name, app.version, app.context)
         except (requests.RequestException, ValueError) as error:
             api_errors += 1
             print(f"{Colors.RED}✗ {app.name} ({app.version}) - API error: {error}{Colors.RESET}")

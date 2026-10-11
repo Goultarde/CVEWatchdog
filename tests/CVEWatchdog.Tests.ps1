@@ -7,13 +7,15 @@ Describe "Resolve-Software" {
             [PSCustomObject]@{ matched_cpe = $null; results = @() }
         }
 
-        Resolve-Software -SoftwareName "VLC media player" -Version "3.0.21"
+        Resolve-Software -SoftwareName "VLC media player" -Version "3.0.21" -Context "VideoLAN"
 
         Should -Invoke Invoke-RestMethod -Times 1 -ParameterFilter {
             $Uri -eq "http://localhost:8001/api/resolve" -and
             $Method -eq "Post" -and
             ($Body | ConvertFrom-Json).software -eq "VLC media player" -and
-            ($Body | ConvertFrom-Json).version -eq "3.0.21"
+            ($Body | ConvertFrom-Json).version -eq "3.0.21" -and
+            ($Body | ConvertFrom-Json).context -eq "VideoLAN" -and
+            ($Body | ConvertFrom-Json).platform -eq "windows"
         }
     }
 }

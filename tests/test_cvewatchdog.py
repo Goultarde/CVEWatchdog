@@ -30,12 +30,17 @@ class APIClientTests(unittest.TestCase):
         post.return_value = response
 
         result = cvewatchdog.resolve_software(
-            "http://localhost:8000/", "VLC media player", "3.0.21"
+            "http://localhost:8000/", "VLC media player", "3.0.21", "VideoLAN"
         )
 
         post.assert_called_once_with(
             "http://localhost:8000/api/resolve",
-            json={"software": "VLC media player", "version": "3.0.21"},
+            json={
+                "software": "VLC media player",
+                "version": "3.0.21",
+                "context": "VideoLAN",
+                "platform": "linux",
+            },
             timeout=10,
         )
         response.raise_for_status.assert_called_once_with()
@@ -52,6 +57,20 @@ class APIClientTests(unittest.TestCase):
 
         self.assertEqual(0, ignored)
         self.assertEqual(("firefox", "123.0"), (software[0].name, software[0].version))
+
+    def test_pacman_inventory_includes_package_context(self):
+        output = """Name            : base
+Version         : 3-3
+Description     : Minimal Arch Linux installation
+URL             : https://archlinux.org
+Packager        : Arch Linux
+
+"""
+
+        software = cvewatchdog.parse_pacman_inventory(output)
+
+        self.assertEqual(("base", "3"), (software[0].name, software[0].version))
+        self.assertIn("archlinux.org", software[0].context)
 
 
 if __name__ == "__main__":

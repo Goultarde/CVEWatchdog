@@ -29,6 +29,7 @@ function Get-InstalledSoftware {
         $software += [PSCustomObject]@{
             Name    = $item.DisplayName
             Version = $item.DisplayVersion
+            Context = "$($item.Publisher) $($item.URLInfoAbout)"
         }
     }
 
@@ -44,13 +45,16 @@ function Get-InstalledSoftware {
 function Resolve-Software {
     param(
         [string]$SoftwareName,
-        [string]$Version
+        [string]$Version,
+        [string]$Context = ""
     )
     
     try {
         $body = @{
             software = $SoftwareName
             version = $Version
+            context = $Context
+            platform = "windows"
         } | ConvertTo-Json
         return Invoke-RestMethod `
             -Uri "$($ApiUrl.TrimEnd('/'))/api/resolve" `
@@ -128,7 +132,7 @@ $apiMatches = 0
 $apiErrors = 0
 
 foreach ($app in $software) {
-    $cveResult = Resolve-Software -SoftwareName $app.Name -Version $app.Version
+    $cveResult = Resolve-Software -SoftwareName $app.Name -Version $app.Version -Context $app.Context
     $cves = @($cveResult.results)
 
     if ($cveResult.error) {

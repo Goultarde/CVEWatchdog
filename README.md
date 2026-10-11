@@ -130,7 +130,7 @@ Wildcard CPE entries are evaluated by FastCVE-API together with their NVD versio
 
 ## How matching works
 
-Both clients send the installed display name and version to `POST /api/resolve`. FastCVE-API owns CPE selection and version applicability, so the Python and PowerShell clients use the same matching rules. A resolved product with no CVE is kept distinct from an unresolved product or an API failure.
+Both clients send the installed display name, version, platform, and available publisher/URL metadata to `POST /api/resolve`. FastCVE-API requires an exact, unambiguous CPE product match and only keeps NVD entries with explicit version and platform evidence. A resolved product with no CVE is kept distinct from an unresolved product or an API failure.
 
 ## Tests
 
