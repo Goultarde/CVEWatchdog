@@ -34,12 +34,21 @@ Describe "Request-ServerReport" {
     It "submits a Windows inventory and downloads the completed report" {
         $script:ServerUrl = "http://server:8002"
         $script:NoSploitScan = $false
+        $script:statusCalls = 0
+        $script:progressMessages = @()
         Mock Start-Sleep {}
         Mock Test-Path { $true }
+        Mock Write-Host { $script:progressMessages += [string]$Object }
         Mock Invoke-RestMethod {
             if ($Uri -like "*/api/v1/reports/*") {
+                $script:statusCalls++
+                if ($script:statusCalls -lt 3) {
+                    return [PSCustomObject]@{
+                        id = "job-1"; status = "running"; stage = "SploitScan enrichment"; processed = 0; total = 61
+                    }
+                }
                 return [PSCustomObject]@{
-                    id = "job-1"; status = "completed"; stage = "completed"; processed = 1; total = 1
+                    id = "job-1"; status = "completed"; stage = "completed"; processed = 61; total = 61
                 }
             }
             return [PSCustomObject]@{ id = "job-1" }
@@ -59,5 +68,9 @@ Describe "Request-ServerReport" {
         Should -Invoke Invoke-WebRequest -Times 1 -ParameterFilter {
             $Uri -eq "http://server:8002/api/v1/reports/job-1/html"
         }
+        @($script:progressMessages | Where-Object { $_ -eq "  SploitScan enrichment: 0/61" }).Count |
+            Should -Be 1
+        @($script:progressMessages | Where-Object { $_ -eq "  completed: 61/61" }).Count |
+            Should -Be 1
     }
 }

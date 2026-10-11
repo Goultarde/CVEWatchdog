@@ -203,7 +203,7 @@ def main():
         import uvicorn
     except ImportError as error:
         raise SystemExit("Server dependencies are missing; reinstall CVEWatchdog with pipx --force") from error
-    uvicorn.run(create_app(args.fastcve_url, args.reports_dir), host=args.host, port=args.port)
+    uvicorn.run(create_app(args.fastcve_url, args.reports_dir), host=args.host, port=args.port, access_log=False)
 
 
 if __name__ == "__main__":

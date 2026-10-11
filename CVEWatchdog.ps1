@@ -166,13 +166,18 @@ function Request-ServerReport {
         -Body $payload `
         -TimeoutSec 30
 
+    $lastProgress = $null
     do {
         Start-Sleep -Seconds 2
         $status = Invoke-RestMethod `
             -Uri "$($ServerUrl.TrimEnd('/'))/api/v1/reports/$($job.id)" `
             -Method Get `
             -TimeoutSec 10
-        Write-Host "  $($status.stage): $($status.processed)/$($status.total)"
+        $progress = "$($status.stage):$($status.processed):$($status.total)"
+        if ($progress -ne $lastProgress) {
+            Write-Host "  $($status.stage): $($status.processed)/$($status.total)"
+            $lastProgress = $progress
+        }
         if ($status.status -eq "failed") {
             throw "CVEWatchdog Server failed: $($status.error)"
         }
