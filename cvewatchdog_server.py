@@ -12,6 +12,7 @@ import requests
 from fastcve import FastCVE
 from rich.console import Console
 from rich.logging import RichHandler
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
 
 from CVEWatchdog import get_cvss_severity, resolve_software, run_sploitscan, write_html_report
 
@@ -119,28 +120,37 @@ def build_report(job_id, inventory, resolver, reports_dir):
         all_cves = []
         resolved = 0
         api_errors = 0
-        for index, item in enumerate(inventory["software"], 1):
-            try:
-                result = resolver(
-                    item["name"], item["version"], item["context"], inventory["platform"]
-                )
-            except (requests.RequestException, RuntimeError, ValueError):
-                api_errors += 1
-                result = {}
-            matched_cpe = result.get("matched_cpe")
-            cves = result.get("results") or []
-            if matched_cpe:
-                resolved += 1
-            if matched_cpe and cves:
-                vulnerable.append({
-                    "name": item["name"],
-                    "version": item["version"],
-                    "cpe": matched_cpe["cpe"],
-                    "cves": cves,
-                })
-                all_cves.extend(cves)
-            with JOBS_LOCK:
-                JOBS[job_id]["processed"] = index
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[cyan]FastCVE resolution[/]"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            console=CONSOLE,
+        ) as progress:
+            task = progress.add_task("resolve", total=len(inventory["software"]))
+            for index, item in enumerate(inventory["software"], 1):
+                try:
+                    result = resolver(
+                        item["name"], item["version"], item["context"], inventory["platform"]
+                    )
+                except (requests.RequestException, RuntimeError, ValueError):
+                    api_errors += 1
+                    result = {}
+                matched_cpe = result.get("matched_cpe")
+                cves = result.get("results") or []
+                if matched_cpe:
+                    resolved += 1
+                if matched_cpe and cves:
+                    vulnerable.append({
+                        "name": item["name"],
+                        "version": item["version"],
+                        "cpe": matched_cpe["cpe"],
+                        "cves": cves,
+                    })
+                    all_cves.extend(cves)
+                with JOBS_LOCK:
+                    JOBS[job_id]["processed"] = index
+                progress.advance(task)
 
         if api_errors == len(inventory["software"]):
             raise RuntimeError("FastCVE-API failed for every software entry")

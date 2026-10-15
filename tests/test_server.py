@@ -27,7 +27,8 @@ class ServerTests(unittest.TestCase):
 
     @patch.object(cvewatchdog_server.LOGGER, "info")
     @patch.object(cvewatchdog_server, "run_sploitscan")
-    def test_worker_resolves_inventory_and_writes_report(self, run_sploitscan, log_info):
+    @patch.object(cvewatchdog_server, "Progress")
+    def test_worker_resolves_inventory_and_writes_report(self, progress_class, run_sploitscan, log_info):
         resolve = Mock()
         resolve.return_value = {
             "matched_cpe": {"cpe": "cpe:2.3:a:acme:widget:*", "score": 1},
@@ -54,6 +55,9 @@ class ServerTests(unittest.TestCase):
         self.assertEqual("completed", cvewatchdog_server.JOBS["job"]["status"])
         self.assertEqual(1, cvewatchdog_server.JOBS["job"]["summary"]["critical"])
         resolve.assert_called_once_with("Widget", "1.0", "Acme", "windows")
+        progress = progress_class.return_value.__enter__.return_value
+        progress.add_task.assert_called_once_with("resolve", total=1)
+        progress.advance.assert_called_once_with(progress.add_task.return_value)
         run_sploitscan.assert_called_once()
         log_info.assert_any_call(
             "Report %s started: %d %s software entries, SploitScan %s",
