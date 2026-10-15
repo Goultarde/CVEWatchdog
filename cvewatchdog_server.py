@@ -3,9 +3,11 @@ import logging
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import requests
+from fastcve import FastCVE
 
 from CVEWatchdog import get_cvss_severity, resolve_software, run_sploitscan, write_html_report
 
@@ -74,7 +76,7 @@ def make_summary(software_count, resolved_count, api_errors, cves):
     }
 
 
-def build_report(job_id, inventory, fastcve_url, reports_dir):
+def build_report(job_id, inventory, resolver, reports_dir):
     try:
         with JOBS_LOCK:
             JOBS[job_id].update(status="running", stage="FastCVE resolution")
@@ -84,10 +86,10 @@ def build_report(job_id, inventory, fastcve_url, reports_dir):
         api_errors = 0
         for index, item in enumerate(inventory["software"], 1):
             try:
-                result = resolve_software(
-                    fastcve_url, item["name"], item["version"], item["context"], inventory["platform"]
+                result = resolver(
+                    item["name"], item["version"], item["context"], inventory["platform"]
                 )
-            except (requests.RequestException, ValueError):
+            except (requests.RequestException, RuntimeError, ValueError):
                 api_errors += 1
                 result = {}
             matched_cpe = result.get("matched_cpe")
@@ -133,7 +135,7 @@ def build_report(job_id, inventory, fastcve_url, reports_dir):
             JOBS[job_id].update(status="failed", stage="failed", error=str(error))
 
 
-def create_app(fastcve_url="http://localhost:8001", reports_dir=None):
+def create_app(fastcve_url=None, reports_dir=None, data_path=None, engine=None):
     try:
         from fastapi import FastAPI, HTTPException, Request
         from fastapi.responses import FileResponse
@@ -142,10 +144,38 @@ def create_app(fastcve_url="http://localhost:8001", reports_dir=None):
 
     report_root = Path(reports_dir or "~/.local/share/cvewatchdog/reports").expanduser().resolve()
     report_root.mkdir(parents=True, exist_ok=True)
-    app = FastAPI(title="CVEWatchdog Server", version="2.0.1")
+    fastcve_engine = None if fastcve_url else (engine or FastCVE(data_path))
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        if fastcve_engine:
+            LOGGER.info("Loading embedded FastCVE engine from %s", fastcve_engine.data_path)
+            await fastcve_engine.load()
+        try:
+            yield
+        finally:
+            if fastcve_engine:
+                fastcve_engine.close()
+
+    app = FastAPI(title="CVEWatchdog Server", version="2.1.0", lifespan=lifespan)
+    if fastcve_url:
+        resolver = lambda name, version, context, platform_name: resolve_software(
+            fastcve_url, name, version, context, platform_name
+        )
+    else:
+        resolver = fastcve_engine.resolve
+    app.state.fastcve_resolver = resolver
 
     @app.get("/health")
     def health():
+        if fastcve_engine:
+            stats = fastcve_engine.health()
+            return {
+                "status": "ok" if stats["status"] == "healthy" else "degraded",
+                "fastcve": "embedded",
+                "cves_indexed": stats["cves_indexed"],
+                "data_path": stats["data_path"],
+            }
         try:
             response = requests.get(f"{fastcve_url.rstrip('/')}/health", timeout=5)
             response.raise_for_status()
@@ -170,7 +200,7 @@ def create_app(fastcve_url="http://localhost:8001", reports_dir=None):
                 "total": len(inventory["software"]),
                 "hostname": inventory["hostname"],
             }
-        EXECUTOR.submit(build_report, job_id, inventory, fastcve_url, report_root)
+        EXECUTOR.submit(build_report, job_id, inventory, resolver, report_root)
         return {"id": job_id, "status": "queued", "status_url": f"/api/v1/reports/{job_id}"}
 
     @app.get("/api/v1/reports/{job_id}")
@@ -197,7 +227,8 @@ def create_app(fastcve_url="http://localhost:8001", reports_dir=None):
 
 def main():
     parser = argparse.ArgumentParser(description="CVEWatchdog report server")
-    parser.add_argument("--fastcve-url", default="http://localhost:8001")
+    parser.add_argument("--data-path", default="~/.local/share/cvewatchdog/fastcve")
+    parser.add_argument("--fastcve-url", help="Use an external FastCVE-API instead of the embedded engine")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8002)
     parser.add_argument("--reports-dir", default="~/.local/share/cvewatchdog/reports")
@@ -206,7 +237,16 @@ def main():
         import uvicorn
     except ImportError as error:
         raise SystemExit("Server dependencies are missing; reinstall CVEWatchdog with pipx --force") from error
-    uvicorn.run(create_app(args.fastcve_url, args.reports_dir), host=args.host, port=args.port, access_log=False)
+    uvicorn.run(
+        create_app(
+            fastcve_url=args.fastcve_url,
+            reports_dir=args.reports_dir,
+            data_path=args.data_path,
+        ),
+        host=args.host,
+        port=args.port,
+        access_log=False,
+    )
 
 
 if __name__ == "__main__":

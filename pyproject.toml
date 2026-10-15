@@ -4,15 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cvewatchdog"
-version = "2.0.1"
-description = "Cross-platform installed-software vulnerability scanner for FastCVE-API"
+version = "2.1.0"
+description = "Cross-platform vulnerability scanner with an embedded FastCVE engine"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = { file = "LICENSE" }
 dependencies = [
     "requests==2.32.5",
     "fastapi==0.120.4",
     "uvicorn==0.38.0",
+    "fastcve-api @ git+https://github.com/Goultarde/FastCVE-API.git@main",
 ]
 
 [project.scripts]
