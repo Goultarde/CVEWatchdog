@@ -121,6 +121,7 @@ Packager        : Arch Linux
         self.assertIn('id="severity-filter"', document)
         self.assertIn('id="type-filter"', document)
         self.assertIn('id="cwe-filter"', document)
+        self.assertNotIn('id="poc-filter"', document)
         self.assertIn('<option value="CWE-863">CWE-863: Incorrect Authorization</option>', document)
         self.assertNotIn("—", document)
         self.assertNotIn("–", document)
@@ -138,13 +139,12 @@ Packager        : Arch Linux
         self.assertIn('class="hero"', document)
         self.assertIn('class="panel filter-panel"', document)
         self.assertIn("function filterReport()", document)
-        self.assertIn("--apple-radius:22px", document)
-        self.assertIn("font-family:-apple-system", document)
-        self.assertIn("background:linear-gradient(135deg,#171719,#08080a)", document)
-        self.assertIn("radial-gradient(900px 500px", document)
-        self.assertIn("background-attachment:fixed", document)
-        self.assertIn("transition:transform .18s ease", document)
-        self.assertIn("transform:scale(1.025)", document)
+        self.assertIn("background:var(--bg)", document)
+        self.assertNotIn("backdrop-filter", document)
+        self.assertNotIn("background-attachment:fixed", document)
+        self.assertIn("transition:transform .12s ease", document)
+        self.assertIn("transform:translateY(-1px)", document)
+        self.assertIn("row.filterText.includes(query)", document)
         self.assertNotIn("scroll-behavior:smooth", document)
 
     @patch.object(cvewatchdog.subprocess, "Popen")
@@ -209,6 +209,10 @@ Packager        : Arch Linux
         self.assertIn("<summary>2 exploit(s)</summary>", document)
         self.assertIn('href="https://example.test/poc"', document)
         self.assertIn('target="_blank" rel="noopener noreferrer">GitHub PoC</a>', document)
+        self.assertIn('id="poc-filter"', document)
+        self.assertIn('<option value="true">With PoC</option>', document)
+        self.assertIn('data-poc="true"', document)
+        self.assertIn("row.dataset.poc===poc.value", document)
 
     def test_vulnerability_type_classification_is_conservative(self):
         self.assertIn(("lpe", "LPE"), cvewatchdog.classify_vulnerability(
