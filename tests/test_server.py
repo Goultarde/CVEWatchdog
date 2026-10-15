@@ -152,6 +152,20 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(42, health["cves_indexed"])
         self.assertEqual({}, app.state.fastcve_resolver("Widget", "1.0", "Acme", "windows"))
 
+    def test_forced_shutdown_cancels_lifespan_without_error(self):
+        engine = Mock(data_path=Path("/tmp/fastcve-test"))
+        engine.health.return_value = {"status": "healthy"}
+        with tempfile.TemporaryDirectory() as directory:
+            app = cvewatchdog_server.create_app(reports_dir=directory, engine=engine)
+
+            async def cancel_lifespan():
+                async with app.router.lifespan_context(app):
+                    raise asyncio.CancelledError
+
+            asyncio.run(cancel_lifespan())
+
+        engine.close.assert_called_once_with()
+
     @patch("uvicorn.run")
     @patch.object(cvewatchdog_server, "create_app")
     @patch.object(cvewatchdog_server, "FastCVE")

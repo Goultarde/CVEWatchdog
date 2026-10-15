@@ -206,6 +206,8 @@ def create_app(fastcve_url=None, reports_dir=None, data_path=None, engine=None):
             await load_fastcve(fastcve_engine)
         try:
             yield
+        except asyncio.CancelledError:
+            pass
         finally:
             if fastcve_engine:
                 fastcve_engine.close()
