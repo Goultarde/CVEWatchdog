@@ -5,10 +5,11 @@ import signal
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
 import requests
+import uvicorn
 from fastcve import FastCVE
 from rich.console import Console
 from rich.logging import RichHandler
@@ -24,27 +25,42 @@ LOGGER = logging.getLogger("uvicorn.error")
 CONSOLE = Console(stderr=True)
 
 
-async def load_fastcve(engine):
-    LOGGER.info("Loading embedded FastCVE engine from %s", engine.data_path)
-    fastcve_logger = logging.getLogger("app.config")
-    previous_handlers = fastcve_logger.handlers[:]
-    previous_propagate = fastcve_logger.propagate
+@contextmanager
+def rich_logs(logger_name):
+    logger = logging.getLogger(logger_name)
+    previous_handlers = logger.handlers[:]
+    previous_propagate = logger.propagate
     handler = RichHandler(
         console=CONSOLE, show_time=False, show_level=False, show_path=False, markup=False
     )
     handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
-    fastcve_logger.handlers = [handler]
-    fastcve_logger.propagate = False
+    logger.handlers = [handler]
+    logger.propagate = False
     try:
+        yield
+    finally:
+        logger.handlers = previous_handlers
+        logger.propagate = previous_propagate
+
+
+async def load_fastcve(engine):
+    LOGGER.info("Loading embedded FastCVE engine from %s", engine.data_path)
+    with rich_logs("app.config"):
         with CONSOLE.status("[cyan]Loading FastCVE data and indexes...[/]", spinner="dots"):
             await engine.load()
-    finally:
-        fastcve_logger.handlers = previous_handlers
-        fastcve_logger.propagate = previous_propagate
 
 
 def interrupt_startup(_signal_number, _frame):
     raise KeyboardInterrupt
+
+
+class CVEWatchdogServer(uvicorn.Server):
+    async def shutdown(self, sockets=None):
+        with rich_logs("uvicorn.error"):
+            with CONSOLE.status("[cyan]Stopping CVEWatchdog Server...[/]", spinner="dots"):
+                await super().shutdown(sockets)
+                await asyncio.to_thread(EXECUTOR.shutdown, wait=True, cancel_futures=True)
+        CONSOLE.print("[green]CVEWatchdog Server stopped.[/]")
 
 
 def validate_inventory(payload):
@@ -161,7 +177,28 @@ def build_report(job_id, inventory, resolver, reports_dir):
             with JOBS_LOCK:
                 JOBS[job_id].update(stage="SploitScan enrichment", processed=0, total=cve_count)
             LOGGER.info("SploitScan enrichment started for %d CVEs (report %s)", cve_count, job_id)
-            intelligence = run_sploitscan(all_cves)
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[cyan]{task.description}[/]"),
+                BarColumn(),
+                MofNCompleteColumn(),
+                console=CONSOLE,
+            ) as progress:
+                task = progress.add_task("enrich", total=cve_count)
+
+                def advance_sploitscan(_cve_id):
+                    with JOBS_LOCK:
+                        JOBS[job_id]["processed"] += 1
+                    progress.update(
+                        task, advance=1, description=f"SploitScan {_cve_id}"
+                    )
+
+                intelligence = run_sploitscan(all_cves, advance_sploitscan)
+                with JOBS_LOCK:
+                    JOBS[job_id]["processed"] = cve_count
+                progress.update(
+                    task, completed=cve_count, description="SploitScan enrichment"
+                )
             LOGGER.info("SploitScan enrichment completed for %d CVEs (report %s)", cve_count, job_id)
 
         summary = make_summary(len(inventory["software"]), resolved, api_errors, all_cves)
@@ -288,10 +325,6 @@ def main():
     parser.add_argument("--port", type=int, default=8002)
     parser.add_argument("--reports-dir", default="~/.local/share/cvewatchdog/reports")
     args = parser.parse_args()
-    try:
-        import uvicorn
-    except ImportError as error:
-        raise SystemExit("Server dependencies are missing; reinstall CVEWatchdog with pipx --force") from error
     fastcve_engine = None
     if not args.fastcve_url:
         fastcve_engine = FastCVE(args.data_path)
@@ -302,20 +335,26 @@ def main():
             finally:
                 signal.signal(signal.SIGINT, previous_handler)
         except KeyboardInterrupt:
-            fastcve_engine.close()
+            with CONSOLE.status("[cyan]Stopping CVEWatchdog Server...[/]", spinner="dots"):
+                fastcve_engine.close()
             CONSOLE.print("[yellow]FastCVE startup cancelled.[/]")
             return
-    uvicorn.run(
-        create_app(
-            fastcve_url=args.fastcve_url,
-            reports_dir=args.reports_dir,
-            data_path=args.data_path,
-            engine=fastcve_engine,
-        ),
+    app = create_app(
+        fastcve_url=args.fastcve_url,
+        reports_dir=args.reports_dir,
+        data_path=args.data_path,
+        engine=fastcve_engine,
+    )
+    config = uvicorn.Config(
+        app,
         host=args.host,
         port=args.port,
         access_log=False,
     )
+    try:
+        CVEWatchdogServer(config).run()
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

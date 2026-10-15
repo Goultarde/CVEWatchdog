@@ -147,23 +147,36 @@ Packager        : Arch Linux
         self.assertIn("transform:scale(1.025)", document)
         self.assertNotIn("scroll-behavior:smooth", document)
 
-    @patch.object(cvewatchdog.subprocess, "run")
-    def test_sploitscan_results_are_indexed_by_cve(self, run):
+    @patch.object(cvewatchdog.subprocess, "Popen")
+    def test_sploitscan_results_are_indexed_by_cve(self, popen):
+        progress = Mock()
+
         def export_json(command, **kwargs):
             export = Path(kwargs["cwd"]) / "result.json"
             export.write_text('[{"CVE Data":{"cveMetadata":{"cveId":"CVE-2026-0001"}}}]', encoding="utf-8")
-            return Mock(returncode=0, stdout="Data exported to file: result.json\n", stderr="")
+            return Mock(
+                stdout=iter([
+                    "║ CVE ID: CVE-2026-0001 ║\n",
+                    "Data exported to file: result.json\n",
+                ]),
+                wait=Mock(return_value=0),
+            )
 
-        run.side_effect = export_json
-        result = cvewatchdog.run_sploitscan([
-            {"cve_id": "CVE-2026-0001"},
-            {"cve_id": "CVE-2026-0001"},
-            {"cve_id": "invalid"},
-        ])
+        popen.side_effect = export_json
+        with tempfile.TemporaryDirectory() as directory:
+            launcher = Path(directory) / "sploitscan"
+            launcher.write_text(f"#!{cvewatchdog.sys.executable} -E\n", encoding="utf-8")
+            with patch.object(cvewatchdog.shutil, "which", return_value=str(launcher)):
+                result = cvewatchdog.run_sploitscan([
+                    {"cve_id": "CVE-2026-0001"},
+                    {"cve_id": "CVE-2026-0001"},
+                    {"cve_id": "invalid"},
+                ], progress)
 
         self.assertIn("CVE-2026-0001", result)
-        command = run.call_args.args[0]
-        self.assertEqual("sploitscan", command[0])
+        progress.assert_called_once_with("CVE-2026-0001")
+        command = popen.call_args.args[0]
+        self.assertEqual([cvewatchdog.sys.executable, "-u", str(launcher)], command[:3])
         self.assertIn("cisa,epss,prio", command)
 
     def test_html_report_includes_sploitscan_intelligence(self):

@@ -4,7 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 import cvewatchdog_server
 
@@ -30,6 +30,8 @@ class ServerTests(unittest.TestCase):
     @patch.object(cvewatchdog_server, "Progress")
     def test_worker_resolves_inventory_and_writes_report(self, progress_class, run_sploitscan, log_info):
         resolve = Mock()
+        progress = progress_class.return_value.__enter__.return_value
+        progress.add_task.side_effect = ["resolve", "enrich"]
         resolve.return_value = {
             "matched_cpe": {"cpe": "cpe:2.3:a:acme:widget:*", "score": 1},
             "results": [{
@@ -37,7 +39,7 @@ class ServerTests(unittest.TestCase):
                 "version": "1.0", "published": "2026-01-01", "cwes": [],
             }],
         }
-        run_sploitscan.return_value = {}
+        run_sploitscan.side_effect = lambda _cves, callback: callback("CVE-2026-0001") or {}
         inventory = {
             "hostname": "pc", "platform": "windows", "sploitscan": True,
             "software": [{"name": "Widget", "version": "1.0", "context": "Acme"}],
@@ -55,9 +57,17 @@ class ServerTests(unittest.TestCase):
         self.assertEqual("completed", cvewatchdog_server.JOBS["job"]["status"])
         self.assertEqual(1, cvewatchdog_server.JOBS["job"]["summary"]["critical"])
         resolve.assert_called_once_with("Widget", "1.0", "Acme", "windows")
-        progress = progress_class.return_value.__enter__.return_value
-        progress.add_task.assert_called_once_with("resolve", total=1)
-        progress.advance.assert_called_once_with(progress.add_task.return_value)
+        progress.add_task.assert_has_calls([
+            call("resolve", total=1), call("enrich", total=1),
+        ])
+        progress.advance.assert_called_once_with("resolve")
+        progress.update.assert_has_calls([
+            call(
+                "enrich", advance=1,
+                description="SploitScan CVE-2026-0001",
+            ),
+            call("enrich", completed=1, description="SploitScan enrichment"),
+        ])
         run_sploitscan.assert_called_once()
         log_info.assert_any_call(
             "Report %s started: %d %s software entries, SploitScan %s",
@@ -166,10 +176,34 @@ class ServerTests(unittest.TestCase):
 
         engine.close.assert_called_once_with()
 
-    @patch("uvicorn.run")
+    @patch.object(cvewatchdog_server.uvicorn.Server, "shutdown", new_callable=AsyncMock)
+    def test_server_shutdown_uses_rich_status(self, shutdown):
+        server = object.__new__(cvewatchdog_server.CVEWatchdogServer)
+        handlers = cvewatchdog_server.LOGGER.handlers[:]
+        propagate = cvewatchdog_server.LOGGER.propagate
+        with (
+            patch.object(cvewatchdog_server.CONSOLE, "status") as status,
+            patch.object(cvewatchdog_server.CONSOLE, "print") as console_print,
+            patch.object(cvewatchdog_server.EXECUTOR, "shutdown") as executor_shutdown,
+        ):
+            asyncio.run(server.shutdown(["socket"]))
+
+        shutdown.assert_awaited_once_with(["socket"])
+        executor_shutdown.assert_called_once_with(wait=True, cancel_futures=True)
+        status.assert_called_once_with(
+            "[cyan]Stopping CVEWatchdog Server...[/]", spinner="dots"
+        )
+        console_print.assert_called_once_with("[green]CVEWatchdog Server stopped.[/]")
+        self.assertEqual(handlers, cvewatchdog_server.LOGGER.handlers)
+        self.assertEqual(propagate, cvewatchdog_server.LOGGER.propagate)
+
+    @patch.object(cvewatchdog_server, "CVEWatchdogServer")
+    @patch.object(cvewatchdog_server.uvicorn, "Config")
     @patch.object(cvewatchdog_server, "create_app")
     @patch.object(cvewatchdog_server, "FastCVE")
-    def test_server_cli_uses_embedded_fastcve_data_path(self, fastcve, create_app, uvicorn_run):
+    def test_server_cli_uses_embedded_fastcve_data_path(
+        self, fastcve, create_app, config, server_class
+    ):
         application = object()
         engine = fastcve.return_value
         engine.load = AsyncMock()
@@ -187,25 +221,34 @@ class ServerTests(unittest.TestCase):
         )
         fastcve.assert_called_once_with("/srv/fastcve")
         engine.load.assert_awaited_once()
-        uvicorn_run.assert_called_once_with(
+        config.assert_called_once_with(
             application, host="127.0.0.1", port=9000, access_log=False
         )
+        server_class.assert_called_once_with(config.return_value)
+        server_class.return_value.run.assert_called_once_with()
 
-    @patch("uvicorn.run")
+    @patch.object(cvewatchdog_server, "CVEWatchdogServer")
     @patch.object(cvewatchdog_server, "FastCVE")
-    def test_ctrl_c_cancels_fastcve_startup(self, fastcve, uvicorn_run):
+    def test_ctrl_c_cancels_fastcve_startup(self, fastcve, server_class):
         engine = fastcve.return_value
         engine.load = AsyncMock(side_effect=KeyboardInterrupt)
         with (
             patch.object(sys, "argv", ["cvewatchdog-server"]),
-            patch.object(cvewatchdog_server.CONSOLE, "status"),
+            patch.object(cvewatchdog_server.CONSOLE, "status") as status,
             patch.object(cvewatchdog_server.CONSOLE, "print") as console_print,
         ):
             cvewatchdog_server.main()
 
         engine.close.assert_called_once_with()
+        status.assert_any_call(
+            "[cyan]Loading FastCVE data and indexes...[/]", spinner="dots"
+        )
+        status.assert_any_call(
+            "[cyan]Stopping CVEWatchdog Server...[/]",
+            spinner="dots",
+        )
         console_print.assert_called_once_with("[yellow]FastCVE startup cancelled.[/]")
-        uvicorn_run.assert_not_called()
+        server_class.assert_not_called()
 
 
 if __name__ == "__main__":

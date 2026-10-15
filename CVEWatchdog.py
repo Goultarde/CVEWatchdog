@@ -4,6 +4,8 @@ import json
 import os
 import platform
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -235,7 +237,7 @@ def format_cve_table(cves):
         print(f"{cve.get('cve_id', ''):<20} {severity_color}{severity:<12}{Colors.RESET} "
               f"{cvss_str:<8} {cve.get('version', ''):<15} {published:<12} {description:<50}")
 
-def run_sploitscan(cves):
+def run_sploitscan(cves, progress_callback=None):
     """Run the optional SploitScan CLI once and index its JSON results by CVE ID."""
     cve_ids = list(dict.fromkeys(
         str(cve.get("cve_id", "")).upper() for cve in cves
@@ -244,25 +246,54 @@ def run_sploitscan(cves):
     if not cve_ids:
         return {}
 
+    executable = shutil.which("sploitscan")
+    if not executable:
+        raise RuntimeError("SploitScan is not installed; run: pipx install sploitscan")
+    command = [executable]
+    try:
+        shebang = Path(executable).read_text(encoding="utf-8").splitlines()[0]
+        launcher = shlex.split(shebang[2:]) if shebang.startswith("#!") else []
+        if launcher and Path(launcher[0]).name.lower().startswith("python"):
+            command = [launcher[0], "-u", executable]
+    except (OSError, UnicodeError, ValueError, IndexError):
+        pass
+
     with tempfile.TemporaryDirectory() as directory:
         import_path = Path(directory) / "cves.txt"
         import_path.write_text("\n".join(cve_ids), encoding="utf-8")
         try:
-            result = subprocess.run(
-                ["sploitscan", "--import-file", str(import_path), "--export", "json",
+            process = subprocess.Popen(
+                command + ["--import-file", str(import_path), "--export", "json",
                  "--methods", "cisa,epss,prio"],
                 cwd=directory,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
-                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                bufsize=1,
+                env={
+                    **os.environ,
+                    "PYTHONIOENCODING": "utf-8",
+                    "PYTHONUNBUFFERED": "1",
+                },
             )
         except FileNotFoundError as error:
             raise RuntimeError("SploitScan is not installed; run: pipx install sploitscan") from error
-        if result.returncode:
-            detail = (result.stderr or result.stdout).strip().splitlines()
+        output = []
+        processed = set()
+        for line in process.stdout:
+            output.append(line)
+            match = re.search(r"CVE ID:\s*(CVE-\d{4}-\d{4,7})", line, re.IGNORECASE)
+            if match and match.group(1).upper() not in processed:
+                cve_id = match.group(1).upper()
+                processed.add(cve_id)
+                if progress_callback:
+                    progress_callback(cve_id)
+        return_code = process.wait()
+        output = "".join(output)
+        if return_code:
+            detail = output.strip().splitlines()
             raise RuntimeError(detail[-1] if detail else "SploitScan failed")
-
-        match = re.search(r"Data exported to file:\s*(.+\.json)\s*$", result.stdout, re.MULTILINE)
+        match = re.search(r"Data exported to file:\s*(.+\.json)\s*$", output, re.MULTILINE)
         if not match:
             raise RuntimeError("SploitScan did not produce a JSON export")
         export_path = Path(match.group(1).strip())
