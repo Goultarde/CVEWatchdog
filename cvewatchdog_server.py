@@ -11,6 +11,7 @@ from pathlib import Path
 import requests
 from fastcve import FastCVE
 from rich.console import Console
+from rich.logging import RichHandler
 
 from CVEWatchdog import get_cvss_severity, resolve_software, run_sploitscan, write_html_report
 
@@ -24,8 +25,21 @@ CONSOLE = Console(stderr=True)
 
 async def load_fastcve(engine):
     LOGGER.info("Loading embedded FastCVE engine from %s", engine.data_path)
-    with CONSOLE.status("[cyan]Loading FastCVE data and indexes...[/]", spinner="dots"):
-        await engine.load()
+    fastcve_logger = logging.getLogger("app.config")
+    previous_handlers = fastcve_logger.handlers[:]
+    previous_propagate = fastcve_logger.propagate
+    handler = RichHandler(
+        console=CONSOLE, show_time=False, show_level=False, show_path=False, markup=False
+    )
+    handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    fastcve_logger.handlers = [handler]
+    fastcve_logger.propagate = False
+    try:
+        with CONSOLE.status("[cyan]Loading FastCVE data and indexes...[/]", spinner="dots"):
+            await engine.load()
+    finally:
+        fastcve_logger.handlers = previous_handlers
+        fastcve_logger.propagate = previous_propagate
 
 
 def interrupt_startup(_signal_number, _frame):

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import sys
 import tempfile
 import unittest
@@ -110,6 +111,9 @@ class ServerTests(unittest.TestCase):
                 }
 
         engine = Engine()
+        fastcve_logger = logging.getLogger("app.config")
+        handlers = fastcve_logger.handlers[:]
+        propagate = fastcve_logger.propagate
         with tempfile.TemporaryDirectory() as directory:
             app = cvewatchdog_server.create_app(reports_dir=directory, engine=engine)
 
@@ -123,6 +127,8 @@ class ServerTests(unittest.TestCase):
 
         self.assertTrue(engine.loaded)
         self.assertTrue(engine.closed)
+        self.assertEqual(handlers, fastcve_logger.handlers)
+        self.assertEqual(propagate, fastcve_logger.propagate)
         status.assert_called_once_with(
             "[cyan]Loading FastCVE data and indexes...[/]", spinner="dots"
         )
