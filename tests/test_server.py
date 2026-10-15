@@ -55,8 +55,16 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(1, cvewatchdog_server.JOBS["job"]["summary"]["critical"])
         resolve.assert_called_once_with("Widget", "1.0", "Acme", "windows")
         run_sploitscan.assert_called_once()
+        log_info.assert_any_call(
+            "Report %s started: %d %s software entries, SploitScan %s",
+            "job", 1, "windows", "enabled",
+        )
         log_info.assert_any_call("SploitScan enrichment started for %d CVEs (report %s)", 1, "job")
         log_info.assert_any_call("SploitScan enrichment completed for %d CVEs (report %s)", 1, "job")
+        log_info.assert_any_call(
+            "Report %s completed: %d/%d software resolved, %d CVEs, %d errors",
+            "job", 1, 1, 1, 0,
+        )
 
     def test_http_api_exposes_report_routes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -70,7 +78,8 @@ class ServerTests(unittest.TestCase):
         self.assertIn("/api/v1/reports/{job_id}", paths)
         self.assertIn("/api/v1/reports/{job_id}/html", paths)
 
-    def test_worker_fails_instead_of_reporting_safe_when_fastcve_is_down(self):
+    @patch.object(cvewatchdog_server.LOGGER, "error")
+    def test_worker_fails_instead_of_reporting_safe_when_fastcve_is_down(self, log_error):
         resolve = Mock()
         resolve.side_effect = cvewatchdog_server.requests.RequestException("offline")
         inventory = {
@@ -86,6 +95,9 @@ class ServerTests(unittest.TestCase):
 
         self.assertEqual("failed", cvewatchdog_server.JOBS["job"]["status"])
         self.assertIn("every software entry", cvewatchdog_server.JOBS["job"]["error"])
+        log_error.assert_called_once_with(
+            "Report %s failed: %s", "job", unittest.mock.ANY
+        )
 
     def test_embedded_engine_is_loaded_and_reported_by_health(self):
         class Engine:

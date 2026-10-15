@@ -108,6 +108,13 @@ def build_report(job_id, inventory, resolver, reports_dir):
     try:
         with JOBS_LOCK:
             JOBS[job_id].update(status="running", stage="FastCVE resolution")
+        LOGGER.info(
+            "Report %s started: %d %s software entries, SploitScan %s",
+            job_id,
+            len(inventory["software"]),
+            inventory["platform"],
+            "enabled" if inventory["sploitscan"] else "disabled",
+        )
         vulnerable = []
         all_cves = []
         resolved = 0
@@ -158,9 +165,18 @@ def build_report(job_id, inventory, resolver, reports_dir):
                 summary=summary,
                 report_path=str(report_path),
             )
+        LOGGER.info(
+            "Report %s completed: %d/%d software resolved, %d CVEs, %d errors",
+            job_id,
+            resolved,
+            len(inventory["software"]),
+            summary["total_cves"],
+            api_errors,
+        )
     except Exception as error:
         with JOBS_LOCK:
             JOBS[job_id].update(status="failed", stage="failed", error=str(error))
+        LOGGER.error("Report %s failed: %s", job_id, error)
 
 
 def create_app(fastcve_url=None, reports_dir=None, data_path=None, engine=None):
