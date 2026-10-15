@@ -3,7 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import cvewatchdog_server
 
@@ -105,7 +105,7 @@ class ServerTests(unittest.TestCase):
 
             def health(self):
                 return {
-                    "status": "healthy", "cves_indexed": 42,
+                    "status": "healthy" if self.loaded else "loading", "cves_indexed": 42,
                     "data_path": str(self.data_path),
                 }
 
@@ -118,18 +118,25 @@ class ServerTests(unittest.TestCase):
                     self.assertTrue(engine.loaded)
                     return next(route.endpoint for route in app.routes if route.path == "/health")()
 
-            health = asyncio.run(run_lifecycle())
+            with patch.object(cvewatchdog_server.CONSOLE, "status") as status:
+                health = asyncio.run(run_lifecycle())
 
         self.assertTrue(engine.loaded)
         self.assertTrue(engine.closed)
+        status.assert_called_once_with(
+            "[cyan]Loading FastCVE data and indexes...[/]", spinner="dots"
+        )
         self.assertEqual("embedded", health["fastcve"])
         self.assertEqual(42, health["cves_indexed"])
         self.assertEqual({}, app.state.fastcve_resolver("Widget", "1.0", "Acme", "windows"))
 
     @patch("uvicorn.run")
     @patch.object(cvewatchdog_server, "create_app")
-    def test_server_cli_uses_embedded_fastcve_data_path(self, create_app, uvicorn_run):
+    @patch.object(cvewatchdog_server, "FastCVE")
+    def test_server_cli_uses_embedded_fastcve_data_path(self, fastcve, create_app, uvicorn_run):
         application = object()
+        engine = fastcve.return_value
+        engine.load = AsyncMock()
         create_app.return_value = application
         with patch.object(sys, "argv", [
             "cvewatchdog-server", "--data-path", "/srv/fastcve", "--port", "9000",
@@ -140,10 +147,29 @@ class ServerTests(unittest.TestCase):
             fastcve_url=None,
             reports_dir="~/.local/share/cvewatchdog/reports",
             data_path="/srv/fastcve",
+            engine=engine,
         )
+        fastcve.assert_called_once_with("/srv/fastcve")
+        engine.load.assert_awaited_once()
         uvicorn_run.assert_called_once_with(
             application, host="127.0.0.1", port=9000, access_log=False
         )
+
+    @patch("uvicorn.run")
+    @patch.object(cvewatchdog_server, "FastCVE")
+    def test_ctrl_c_cancels_fastcve_startup(self, fastcve, uvicorn_run):
+        engine = fastcve.return_value
+        engine.load = AsyncMock(side_effect=KeyboardInterrupt)
+        with (
+            patch.object(sys, "argv", ["cvewatchdog-server"]),
+            patch.object(cvewatchdog_server.CONSOLE, "status"),
+            patch.object(cvewatchdog_server.CONSOLE, "print") as console_print,
+        ):
+            cvewatchdog_server.main()
+
+        engine.close.assert_called_once_with()
+        console_print.assert_called_once_with("[yellow]FastCVE startup cancelled.[/]")
+        uvicorn_run.assert_not_called()
 
 
 if __name__ == "__main__":

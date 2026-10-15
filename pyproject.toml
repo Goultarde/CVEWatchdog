@@ -13,6 +13,7 @@ dependencies = [
     "requests==2.32.5",
     "fastapi==0.120.4",
     "uvicorn==0.38.0",
+    "rich==15.0.0",
     "fastcve-api @ git+https://github.com/Goultarde/FastCVE-API.git@main",
 ]
 

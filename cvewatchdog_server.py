@@ -1,5 +1,7 @@
 import argparse
+import asyncio
 import logging
+import signal
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -8,6 +10,7 @@ from pathlib import Path
 
 import requests
 from fastcve import FastCVE
+from rich.console import Console
 
 from CVEWatchdog import get_cvss_severity, resolve_software, run_sploitscan, write_html_report
 
@@ -16,6 +19,17 @@ JOBS = {}
 JOBS_LOCK = threading.Lock()
 EXECUTOR = ThreadPoolExecutor(max_workers=1)
 LOGGER = logging.getLogger("uvicorn.error")
+CONSOLE = Console(stderr=True)
+
+
+async def load_fastcve(engine):
+    LOGGER.info("Loading embedded FastCVE engine from %s", engine.data_path)
+    with CONSOLE.status("[cyan]Loading FastCVE data and indexes...[/]", spinner="dots"):
+        await engine.load()
+
+
+def interrupt_startup(_signal_number, _frame):
+    raise KeyboardInterrupt
 
 
 def validate_inventory(payload):
@@ -148,9 +162,8 @@ def create_app(fastcve_url=None, reports_dir=None, data_path=None, engine=None):
 
     @asynccontextmanager
     async def lifespan(_app):
-        if fastcve_engine:
-            LOGGER.info("Loading embedded FastCVE engine from %s", fastcve_engine.data_path)
-            await fastcve_engine.load()
+        if fastcve_engine and fastcve_engine.health()["status"] != "healthy":
+            await load_fastcve(fastcve_engine)
         try:
             yield
         finally:
@@ -237,11 +250,25 @@ def main():
         import uvicorn
     except ImportError as error:
         raise SystemExit("Server dependencies are missing; reinstall CVEWatchdog with pipx --force") from error
+    fastcve_engine = None
+    if not args.fastcve_url:
+        fastcve_engine = FastCVE(args.data_path)
+        try:
+            previous_handler = signal.signal(signal.SIGINT, interrupt_startup)
+            try:
+                asyncio.run(load_fastcve(fastcve_engine))
+            finally:
+                signal.signal(signal.SIGINT, previous_handler)
+        except KeyboardInterrupt:
+            fastcve_engine.close()
+            CONSOLE.print("[yellow]FastCVE startup cancelled.[/]")
+            return
     uvicorn.run(
         create_app(
             fastcve_url=args.fastcve_url,
             reports_dir=args.reports_dir,
             data_path=args.data_path,
+            engine=fastcve_engine,
         ),
         host=args.host,
         port=args.port,
