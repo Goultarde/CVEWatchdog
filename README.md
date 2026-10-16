@@ -1,5 +1,7 @@
 # CVEWatchdog
 
+![CVEWatchdog logo](.github/pictures/cvewatchdog-logo.png)
+
 CVEWatchdog scans installed software for known vulnerabilities and generates a
 standalone HTML report. The server includes the FastCVE engine and can enrich
 results with SploitScan.
@@ -132,6 +134,16 @@ The report contains:
 - EPSS, CISA KEV, priority, and public PoCs when SploitScan is enabled
 - Search and local filters that work without a server
 
+## Screenshots
+
+### Server and Windows client
+
+![CVEWatchdog server processing a Windows inventory](.github/pictures/cvewatchdog-server.png)
+
+### HTML report
+
+![CVEWatchdog vulnerability assessment report](.github/pictures/cvewatchdog-server-report.png)
+
 ## Tests
 
 Python tests:
@@ -149,5 +161,3 @@ Invoke-Pester .\tests\CVEWatchdog.Tests.ps1
 ## Contributing
 
 Issues and pull requests are welcome.
-
-![CVEWatchdog report](.github/pictures/CVEWatchdog.png)
