@@ -1,7 +1,7 @@
 ﻿param(
     [string]$ApiUrl = "http://localhost:8001",
     [string]$ServerUrl,
-    [string]$HtmlReport = "cvewatchdog-report.html",
+    [string]$HtmlReport,
     [switch]$NoSploitScan,
     [switch]$Wildcards,
     [switch]$DebugMatching
@@ -183,6 +183,10 @@ function Request-ServerReport {
         }
     } until ($status.status -eq "completed")
 
+    if (-not $OutputPath) {
+        return $null
+    }
+
     $fullPath = [IO.Path]::GetFullPath($OutputPath)
     $parent = Split-Path -Parent $fullPath
     if ($parent -and -not (Test-Path -LiteralPath $parent)) {
@@ -210,7 +214,12 @@ if ($ServerUrl) {
         $softwareData = Get-InstalledSoftware
         Write-Host "`n📡 Sending inventory to CVEWatchdog Server..." -ForegroundColor Cyan
         $reportPath = Request-ServerReport -Software $softwareData.software -OutputPath $HtmlReport
-        Write-Host "✅ HTML report downloaded to $reportPath" -ForegroundColor Green
+        if ($reportPath) {
+            Write-Host "✅ HTML report downloaded to $reportPath" -ForegroundColor Green
+        }
+        else {
+            Write-Host "✅ Server scan completed" -ForegroundColor Green
+        }
         exit 0
     }
     catch {

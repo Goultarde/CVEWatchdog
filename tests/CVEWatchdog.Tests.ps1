@@ -73,4 +73,25 @@ Describe "Request-ServerReport" {
         @($script:progressMessages | Where-Object { $_ -eq "  completed: 61/61" }).Count |
             Should -Be 1
     }
+
+    It "does not download a report when no output path is provided" {
+        $script:ServerUrl = "http://server:8002"
+        $script:NoSploitScan = $false
+        Mock Start-Sleep {}
+        Mock Invoke-RestMethod {
+            if ($Method -eq "Post") {
+                return [PSCustomObject]@{ id = "job-1" }
+            }
+            return [PSCustomObject]@{
+                id = "job-1"; status = "completed"; stage = "completed"; processed = 1; total = 1
+            }
+        }
+        Mock Invoke-WebRequest {}
+
+        Request-ServerReport -Software @([PSCustomObject]@{
+            Name = "VLC media player"; Version = "3.0.21"; Context = "VideoLAN"
+        }) | Should -BeNullOrEmpty
+
+        Should -Invoke Invoke-WebRequest -Times 0
+    }
 }
