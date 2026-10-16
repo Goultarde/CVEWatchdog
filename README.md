@@ -170,7 +170,7 @@ The script generates a structured report with:
   - CWE identifiers
   - Severity level (Critical/High/Medium/Low)
   - CVSS Score
-  - Affected version
+  - Vulnerable version or NVD range
   - Publication date
   - Description
 

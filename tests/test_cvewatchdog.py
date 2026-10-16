@@ -91,7 +91,9 @@ Packager        : Arch Linux
                 "cve_id": "CVE-2026-0001",
                 "cvss_score": 9.8,
                 "cwes": ["CWE-863"],
-                "version": "<2.0",
+                "version": "*",
+                "version_start_including": "1.0",
+                "version_end_excluding": "2.0",
                 "published": "2026-01-01T00:00:00Z",
                 "description": "A local attacker can gain elevated privileges. <img src=x onerror=alert(1)>",
             }],
@@ -115,6 +117,8 @@ Packager        : Arch Linux
 
         self.assertEqual(path.resolve(), result)
         self.assertIn("CVE-2026-0001", document)
+        self.assertIn("Vulnerable range", document)
+        self.assertIn("&gt;= 1.0, &lt; 2.0", document)
         self.assertIn("&lt;script&gt;", document)
         self.assertNotIn("<img src=x", document)
         self.assertIn('id="report-search"', document)
@@ -138,12 +142,24 @@ Packager        : Arch Linux
         self.assertIn('class="type-chip">LPE</span>', document)
         self.assertIn('class="hero"', document)
         self.assertIn('class="panel filter-panel"', document)
+        self.assertIn('class="skip-link" href="#findings"', document)
+        self.assertIn('id="theme-toggle"', document)
+        self.assertIn('aria-pressed="false">Dark theme</button>', document)
+        self.assertIn("localStorage.setItem('cvewatchdog-theme',theme)", document)
+        self.assertIn('[data-theme="dark"]', document)
+        self.assertIn("Vulnerability assessment report", document)
+        self.assertIn('class="summary-panel"', document)
+        self.assertIn("Inventory coverage", document)
+        self.assertNotIn('class="metric-card', document)
         self.assertIn("function filterReport()", document)
-        self.assertIn("background:var(--bg)", document)
+        self.assertIn("background:#fff", document)
+        self.assertNotIn("Georgia", document)
+        self.assertIn("@media print", document)
         self.assertNotIn("backdrop-filter", document)
         self.assertNotIn("background-attachment:fixed", document)
-        self.assertIn("transition:transform .12s ease", document)
-        self.assertIn("transform:translateY(-1px)", document)
+        self.assertIn("transition:background-color .12s ease", document)
+        self.assertIn("@keyframes report-enter", document)
+        self.assertIn("@media(prefers-reduced-motion:reduce)", document)
         self.assertIn("row.filterText.includes(query)", document)
         self.assertNotIn("scroll-behavior:smooth", document)
 

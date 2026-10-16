@@ -419,6 +419,23 @@ def request_server_report(server_url, software, output_path, use_sploitscan=True
     report_path.write_bytes(response.content)
     return report_path.resolve()
 
+def format_vulnerable_range(cve):
+    """Return the affected CPE version or its NVD bounds."""
+    values = []
+    version = str(cve.get("version") or "").strip()
+    if version not in {"", "*", "-"}:
+        values.append(version)
+    for field, operator in (
+        ("version_start_including", ">="),
+        ("version_start_excluding", ">"),
+        ("version_end_including", "<="),
+        ("version_end_excluding", "<"),
+    ):
+        if cve.get(field):
+            values.append(f'{operator} {cve[field]}')
+    return ", ".join(values) or "Not specified"
+
+
 def write_html_report(path, software_with_cves, summary, sploitscan=None):
     """Write a standalone, escaped HTML vulnerability report."""
     sections = []
@@ -474,7 +491,7 @@ def write_html_report(path, software_with_cves, summary, sploitscan=None):
                 f'<td><span class="type-chip">{html.escape(", ".join(label for _, label in vulnerability_types))}</span></td>'
                 f'<td>{cwe_badges}</td>'
                 f'<td>{html.escape(str(score if score is not None else "N/A"))}</td>'
-                f'<td>{html.escape(str(cve.get("version", "")))}</td>'
+                f'<td>{html.escape(format_vulnerable_range(cve))}</td>'
                 f'<td>{html.escape(str(cve.get("published", "")).split("T")[0])}</td>{sploitscan_cells}'
                 f'<td>{html.escape(str(cve.get("description", "")))}</td></tr>'
             )
@@ -484,22 +501,24 @@ def write_html_report(path, software_with_cves, summary, sploitscan=None):
             f'<h2>{html.escape(app["name"])} <small>{html.escape(app["version"])}</small></h2>'
             f'<p class="cpe">{html.escape(app["cpe"])}</p></div><span class="section-count">{cve_label}</span></div>'
             '<div class="table-wrap"><table><thead><tr><th>CVE</th><th>Severity</th><th>Type</th><th>CWE</th>'
-            f'<th>CVSS</th><th>Affected version</th><th>Published</th>{sploitscan_headers}<th>Description</th>'
+            f'<th>CVSS</th><th title="Version or NVD range affected by this CVE">Vulnerable range</th><th>Published</th>{sploitscan_headers}<th>Description</th>'
             f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div></section>'
         )
 
-    cards = "".join(
-        f'<div class="metric-card {tone}"><span>{html.escape(label)}</span><strong>{value}</strong></div>'
-        for label, value, tone in (
-            ("Software scanned", summary["software_scanned"], "neutral"),
-            ("Software resolved", summary["software_resolved"], "resolved"),
-            ("Total CVEs", summary["total_cves"], "total"),
-            ("Critical", summary["critical"], "critical"),
-            ("High", summary["high"], "high"),
-            ("Medium", summary["medium"], "medium"),
-            ("Low", summary["low"], "low"),
-            ("API errors", summary["api_errors"], "errors"),
-        )
+    summary_tables = (
+        '<section class="summary-panel" aria-labelledby="summary-title">'
+        '<h2 id="summary-title">Assessment summary</h2><div class="summary-tables">'
+        '<table><caption>Inventory coverage</caption><tbody>'
+        f'<tr><th scope="row">Software scanned</th><td>{summary["software_scanned"]}</td></tr>'
+        f'<tr><th scope="row">Software resolved</th><td>{summary["software_resolved"]}</td></tr>'
+        f'<tr><th scope="row">API errors</th><td>{summary["api_errors"]}</td></tr>'
+        '</tbody></table><table><caption>Findings by severity</caption><tbody>'
+        f'<tr><th scope="row">Total CVEs</th><td>{summary["total_cves"]}</td></tr>'
+        f'<tr><th scope="row">Critical</th><td class="critical-value">{summary["critical"]}</td></tr>'
+        f'<tr><th scope="row">High</th><td class="high-value">{summary["high"]}</td></tr>'
+        f'<tr><th scope="row">Medium</th><td>{summary["medium"]}</td></tr>'
+        f'<tr><th scope="row">Low</th><td>{summary["low"]}</td></tr>'
+        '</tbody></table></div></section>'
     )
     cwe_options = "".join(
         f'<option value="{cwe}">{cwe}: {html.escape(CWE_NAMES.get(cwe, "Unknown CWE"))}</option>'
@@ -511,39 +530,51 @@ def write_html_report(path, software_with_cves, summary, sploitscan=None):
         if sploitscan is not None else ""
     )
     filter_class = "filters has-poc-filter" if sploitscan is not None else "filters"
+    risk_label = re.sub(r"^[^A-Za-z0-9]+", "", str(summary["risk_level"]))
     document = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CVEWatchdog report</title><style>
-:root{{--bg:#0d1015;--panel:#15191f;--panel-2:#191e26;--text:#f1f5f9;--muted:#94a3b8;--border:#2b3440;--accent:#38bdf8;--accent-soft:#12303d;--critical:#fb7185;--high:#fb923c;--medium:#facc15;--low:#4ade80}}
-*{{box-sizing:border-box}} body{{margin:0;background:var(--bg);color:var(--text);font:14px Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;line-height:1.5}}
-main{{max-width:1480px;margin:auto;padding:36px 28px 64px}} h1,h2,p{{margin-top:0}} button,input,select{{font:inherit}}
-.hero{{display:flex;justify-content:space-between;align-items:center;gap:24px;margin-bottom:24px;padding:24px 26px;border:1px solid var(--border);border-radius:10px;background:var(--panel)}}
-.brand{{display:flex;align-items:center;gap:18px}} .mark{{display:grid;place-items:center;width:54px;height:54px;border-radius:8px;background:#2563eb;font-size:18px;font-weight:900;letter-spacing:-1px}}
-.eyebrow{{margin-bottom:5px;color:#67e8f9;font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}} h1{{margin-bottom:3px;font-size:30px;line-height:1.1;letter-spacing:-.03em}} .subtitle{{margin-bottom:0;color:#b5c2d4}}
-.risk-card{{min-width:190px;padding:14px 18px;border:1px solid #38506b;border-radius:14px;background:rgba(5,11,22,.45);text-align:right}} .risk-card span{{display:block;margin-bottom:5px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.1em}} .risk-card strong{{font-size:16px}}
-.panel,.report-section,.empty-state{{margin:18px 0;border:1px solid var(--border);border-radius:10px;background:var(--panel)}}
-.panel{{padding:20px}} .panel-title,.section-heading{{display:flex;align-items:center;justify-content:space-between;gap:16px}} .panel-title h2,.section-heading h2{{margin:0;font-size:18px;letter-spacing:-.01em}} .panel-title p{{margin:3px 0 0;color:var(--muted)}}
-.actions{{display:flex;gap:8px}} button{{padding:7px 12px;border:1px solid #34445e;border-radius:6px;background:#1b222c;color:#dce5f2;cursor:pointer;transition:transform .12s ease,background .12s ease,border-color .12s ease}} button:hover{{border-color:#4c6b8d;background:#232d39;transform:translateY(-1px)}} button:active{{transform:scale(.98)}}
-.software-list{{display:grid;grid-template-columns:minmax(180px,1fr) auto auto;column-gap:14px;align-items:center;max-height:290px;overflow:auto;margin-top:16px;padding-right:14px;border-top:1px solid var(--border);scrollbar-width:thin;scrollbar-color:#4b5563 #11151b}} .software-list::-webkit-scrollbar{{width:10px}} .software-list::-webkit-scrollbar-track{{background:#11151b}} .software-list::-webkit-scrollbar-thumb{{border:2px solid #11151b;border-radius:8px;background:#4b5563}} .software-list::-webkit-scrollbar-thumb:hover{{background:#64748b}} .software-list>*{{padding:10px 8px;border-bottom:1px solid rgba(38,51,74,.7)}} .software-list label{{display:flex;gap:10px;align-items:center;min-width:0}} .software-list input{{accent-color:var(--accent)}} .software-list small{{color:var(--muted)}} .software-cve-count{{color:#b8c6d8;font-variant-numeric:tabular-nums}}
-.cards{{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:12px;margin:18px 0}} .metric-card{{position:relative;overflow:hidden;padding:17px 18px;border:1px solid var(--border);border-radius:8px;background:var(--panel)}} .metric-card::before{{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:#64748b}} .metric-card span{{display:block;color:var(--muted);font-size:12px;font-weight:650}} .metric-card strong{{display:block;margin-top:4px;font-size:26px;line-height:1.2;font-variant-numeric:tabular-nums}} .metric-card.resolved::before,.metric-card.low::before{{background:var(--low)}} .metric-card.total::before{{background:var(--accent)}} .metric-card.critical::before{{background:var(--critical)}} .metric-card.high::before{{background:var(--high)}} .metric-card.medium::before{{background:var(--medium)}} .metric-card.errors::before{{background:#a78bfa}}
-.filter-panel{{padding:17px 20px}} .filter-head{{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}} .filter-head strong{{font-size:15px}} #visible-count,.section-count{{padding:5px 10px;border:1px solid #28536a;border-radius:999px;background:var(--accent-soft);color:#a5f3fc;font-size:12px;font-weight:750}}
-.filters{{display:grid;grid-template-columns:minmax(240px,1.4fr) repeat(3,minmax(170px,1fr));gap:12px}} .filters.has-poc-filter{{grid-template-columns:minmax(240px,1.4fr) repeat(4,minmax(150px,1fr))}} .filters label{{display:grid;gap:6px;color:var(--muted);font-size:12px;font-weight:650}} .filters input,.filters select{{width:100%;padding:10px 12px;border:1px solid #34445e;border-radius:9px;outline:none;background:#0c1422;color:var(--text)}} .filters input:focus,.filters select:focus{{border-color:var(--accent);box-shadow:0 0 0 3px rgba(34,211,238,.12)}}
-.report-section{{overflow:hidden}} .section-heading{{padding:18px 20px}} .section-heading h2 small{{margin-left:6px;color:var(--muted);font-weight:500}} .cpe{{margin:4px 0 0;color:#8291a7;font:12px ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}}
-.table-wrap{{overflow:auto}} table{{width:100%;border-collapse:collapse}} th{{padding:11px 13px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:#0d1625;color:#90a0b6;font-size:11px;letter-spacing:.06em;text-align:left;text-transform:uppercase;white-space:nowrap}} td{{padding:12px 13px;border-bottom:1px solid rgba(38,51,74,.65);vertical-align:top}} tbody tr:last-child td{{border-bottom:0}} tbody tr:hover{{background:rgba(34,211,238,.035)}} .cve-id{{font-weight:750;color:#dbeafe;white-space:nowrap}}
-.severity,.type-chip,.cwe-chip,.intel-chip{{display:inline-block;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:800;white-space:nowrap}} .severity.critical{{background:rgba(251,113,133,.13);color:var(--critical)}} .severity.high{{background:rgba(251,146,60,.13);color:var(--high)}} .severity.medium{{background:rgba(250,204,21,.13);color:var(--medium)}} .severity.low{{background:rgba(74,222,128,.13);color:var(--low)}} .severity.unknown{{background:#263246;color:#bac4d2}} .type-chip{{background:#202b40;color:#cbd5e1;font-weight:650}} .cwe-chip{{background:rgba(34,211,238,.1);color:#a5f3fc;font-weight:650}} .intel-chip{{background:rgba(167,139,250,.12);color:#ddd6fe}}
-details summary{{color:#a5f3fc;cursor:pointer;white-space:nowrap}} details ul{{min-width:130px;margin:7px 0 0;padding-left:18px}} details a{{color:#93c5fd;text-decoration:none}} details a:hover{{text-decoration:underline}}
-.empty-state{{padding:36px;text-align:center;color:var(--muted)}} footer{{padding-top:24px;color:#66758a;text-align:center;font-size:12px}}
-@media(max-width:900px){{main{{padding:20px 14px 40px}} .hero{{align-items:flex-start;padding:22px;flex-direction:column}} .risk-card{{width:100%;text-align:left}} .cards{{grid-template-columns:repeat(2,1fr)}} .filters,.filters.has-poc-filter{{grid-template-columns:1fr}}}}
-@media(max-width:560px){{.mark{{display:none}} .panel-title{{align-items:flex-start;flex-direction:column}} .software-list{{grid-template-columns:minmax(130px,1fr) auto}} .software-cve-count{{display:none}} .cards{{grid-template-columns:1fr 1fr}} .metric-card{{padding:14px}}}}
-</style></head><body><main><header class="hero"><div class="brand"><div class="mark">CV</div><div><p class="eyebrow">Local vulnerability assessment</p><h1>CVEWatchdog</h1><p class="subtitle">Version-confirmed vulnerability report</p></div></div><div class="risk-card"><span>Overall risk</span><strong>{html.escape(summary["risk_level"])}</strong></div></header>
+<meta name="description" content="Version-confirmed vulnerability assessment generated by CVEWatchdog">
+<title>CVEWatchdog security report</title><style>
+:root{{--surface:#fff;--surface-muted:#eef2f5;--ink:#202830;--muted:#5b6874;--line:#aeb8c1;--line-dark:#65727e;--accent:#2f6082;--header:#263946;--critical:#a61f2b;--high:#a54a16;--medium:#725d14;--low:#24633f}}
+*{{box-sizing:border-box}} html{{color-scheme:light}} body{{margin:0;background:#e8edf0;color:var(--ink);font:14px/1.45 Arial,"Segoe UI",sans-serif}}
+button,input,select{{font:inherit}} button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{{outline:2px solid var(--accent);outline-offset:2px}}
+.skip-link{{position:fixed;top:8px;left:8px;z-index:10;padding:7px 10px;background:#fff;border:1px solid var(--line-dark);color:var(--ink);transform:translateY(-160%)}} .skip-link:focus{{transform:none}}
+main{{max-width:1560px;margin:auto;padding:26px 30px 64px}} h1,h2,p{{margin-top:0}}
+.hero{{display:flex;align-items:center;justify-content:space-between;gap:28px;padding:22px 24px;border:1px solid #182732;border-top:4px solid #4f82a3;background:var(--header);color:#fff}}
+.product-name{{display:block;margin-bottom:6px;color:#a9c8dc;font-size:13px;font-weight:700}} h1{{margin-bottom:5px;font-size:27px;line-height:1.15;font-weight:600;letter-spacing:-.015em}} .subtitle{{margin-bottom:0;color:#d1d9de}}
+.header-side{{display:flex;align-items:stretch;gap:10px}} .theme-toggle{{position:relative;min-width:126px;padding:7px 12px 7px 46px;border-color:#8193a0;background:#1d2d38;color:#fff;font-size:12px;font-weight:600;text-align:left}} .theme-toggle::before{{content:"";position:absolute;left:11px;top:50%;width:25px;height:14px;border:1px solid #9aabb6;border-radius:8px;background:#435661;transform:translateY(-50%);transition:background-color .15s ease,border-color .15s ease}} .theme-toggle::after{{content:"";position:absolute;left:14px;top:50%;width:8px;height:8px;border-radius:50%;background:#fff;transform:translateY(-50%);transition:transform .15s ease}} .theme-toggle:hover{{border-color:#c4d0d7;background:#344a59}} .theme-toggle:hover::before{{border-color:#d9e2e7}}
+.risk-card{{min-width:190px;padding:11px 14px;border:1px solid #d6dce1;border-left:4px solid var(--critical);background:#fff;color:var(--ink)}} .risk-card span{{display:block;margin-bottom:4px;color:var(--muted);font-size:11px;font-weight:600}} .risk-card strong{{font-size:15px;font-weight:700}}
+.panel,.summary-panel,.report-section,.empty-state{{margin:22px 0;background:var(--surface)}} .panel{{padding:18px 20px;border:1px solid var(--line)}}
+.panel-title,.section-heading{{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}} .panel-title h2,.section-heading h2,.summary-panel h2{{margin:0;font-size:17px;line-height:1.3;font-weight:600}} .panel-title p{{max-width:65ch;margin:3px 0 0;color:var(--muted)}}
+.actions{{display:flex;gap:7px}} button{{min-height:32px;padding:5px 10px;border:1px solid var(--line-dark);background:#f7f9fa;color:var(--ink);cursor:pointer;transition:background-color .12s ease,border-color .12s ease}} button:hover{{background:#e4ebef;border-color:#3f5667}} button:active{{background:#d8e1e7}}
+.software-list{{display:grid;grid-template-columns:minmax(180px,1fr) auto auto;column-gap:16px;align-items:center;max-height:280px;overflow:auto;margin-top:15px;border:1px solid var(--line);border-bottom:0;scrollbar-width:thin;scrollbar-color:#7e8b95 #edf1f3}} .software-list::-webkit-scrollbar{{width:9px}} .software-list::-webkit-scrollbar-track{{background:#edf1f3}} .software-list::-webkit-scrollbar-thumb{{border:2px solid #edf1f3;background:#7e8b95}} .software-list>*{{padding:8px 9px;border-bottom:1px solid var(--line)}} .software-list label{{display:flex;align-items:center;gap:9px;min-width:0}} .software-list input{{accent-color:var(--accent)}} .software-list small{{color:var(--muted)}} .software-cve-count{{color:var(--muted);font-variant-numeric:tabular-nums}}
+.summary-panel{{padding:17px 19px 19px;border:1px solid var(--line);border-top:3px solid var(--header)}} .summary-tables{{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:12px}} .summary-tables table{{width:100%;border:1px solid var(--line);border-collapse:collapse}} .summary-tables caption{{padding:8px 10px;background:#405563;color:#fff;font-size:12px;font-weight:700;text-align:left}} .summary-tables th,.summary-tables td{{padding:8px 10px;border-bottom:1px solid var(--line)}} .summary-tables tr:last-child th,.summary-tables tr:last-child td{{border-bottom:0}} .summary-tables th{{width:75%;background:#f0f3f5;font-weight:400;text-align:left}} .summary-tables td{{background:#fff;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}} .critical-value{{color:var(--critical)}} .high-value{{color:var(--high)}}
+.filter-panel{{padding:17px 18px;border:1px solid var(--line);border-top:3px solid var(--accent);background:#fff}} .filter-head{{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px}} .filter-head strong{{font-size:16px}} #visible-count,.section-count{{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;font-weight:600}}
+.filters{{display:grid;grid-template-columns:minmax(240px,1.4fr) repeat(3,minmax(170px,1fr));gap:11px}} .filters.has-poc-filter{{grid-template-columns:minmax(240px,1.4fr) repeat(4,minmax(145px,1fr))}} .filters label{{display:grid;gap:5px;color:#44515c;font-size:11px;font-weight:600}} .filters input,.filters select{{width:100%;min-height:38px;padding:7px 9px;border:1px solid var(--line-dark);background:#fbfcfd;color:var(--ink);outline:0}} .filters input:hover,.filters select:hover{{border-color:#3f5667}} .filters input:focus,.filters select:focus{{border-color:var(--accent);box-shadow:0 0 0 2px rgba(47,96,130,.16)}}
+.report-section{{overflow:hidden;border:1px solid var(--line-dark)}} .section-heading{{padding:14px 16px 11px;border-bottom:1px solid var(--line-dark);background:#f3f5f7}} .section-heading h2 small{{margin-left:7px;color:var(--muted);font-size:13px;font-weight:400}} .cpe{{margin:4px 0 0;color:#69737d;font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}}
+.table-wrap{{overflow:auto}} table{{width:100%;border-collapse:collapse}} th{{padding:9px 10px;border-bottom:1px solid var(--line-dark);background:#dfe5e9;color:#34414b;font-size:10px;font-weight:700;letter-spacing:.035em;text-align:left;text-transform:uppercase;white-space:nowrap}} td{{padding:10px;border-bottom:1px solid #cfd6dc;vertical-align:top}} tbody tr:nth-child(even){{background:#f8fafb}} tbody tr:hover{{background:#edf3f6}} tbody tr:last-child td{{border-bottom:0}} .cve-id{{color:#183f60;font:600 12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:nowrap}}
+.severity,.type-chip,.cwe-chip,.intel-chip{{font-size:11px;font-weight:600;white-space:nowrap}} .severity{{padding-left:6px;border-left:3px solid currentColor}} .severity.critical{{color:var(--critical)}} .severity.high{{color:var(--high)}} .severity.medium{{color:var(--medium)}} .severity.low{{color:var(--low)}} .severity.unknown{{color:#58616a}} .type-chip,.intel-chip{{color:#4b5660}} .cwe-chip{{color:#255575}}
+details summary{{color:#255575;cursor:pointer;white-space:nowrap}} details ul{{min-width:130px;margin:7px 0 0;padding-left:18px}} details a{{color:#255575;text-decoration:underline;text-underline-offset:2px}}
+.empty-state{{padding:36px;border:1px solid var(--line);color:var(--muted);text-align:center}} footer{{padding-top:18px;border-top:1px solid var(--line);color:#69737d;text-align:right;font-size:11px}}
+@keyframes report-enter{{from{{opacity:0;transform:translateY(8px)}}to{{opacity:1;transform:none}}}} .hero,.software-summary,.summary-panel,.filter-panel{{animation:report-enter .32s cubic-bezier(.2,.7,.2,1) both}} .software-summary{{animation-delay:.04s}} .summary-panel{{animation-delay:.08s}} .filter-panel{{animation-delay:.12s}} .theme-toggle:active{{transform:scale(.98)}}
+[data-theme="dark"]{{--surface:#17222b;--surface-muted:#202d37;--ink:#e7edf2;--muted:#aab5be;--line:#52616d;--line-dark:#74828d;--accent:#78aeca;--header:#111c24;--critical:#ff7b86;--high:#f3a064;--medium:#dcc66d;--low:#72c99a;color-scheme:dark}} [data-theme="dark"] body{{background:#0e151b}} [data-theme="dark"] .risk-card,[data-theme="dark"] button,[data-theme="dark"] .summary-tables td,[data-theme="dark"] .filters input,[data-theme="dark"] .filters select{{background:var(--surface);color:var(--ink)}} [data-theme="dark"] button:hover{{background:#293844}} [data-theme="dark"] button:active{{background:#324450}} [data-theme="dark"] .theme-toggle{{background:#1e303c;color:#fff}} [data-theme="dark"] .theme-toggle::before{{border-color:#8fc0da;background:#39799d}} [data-theme="dark"] .theme-toggle::after{{transform:translate(11px,-50%)}} [data-theme="dark"] .theme-toggle:hover{{background:#29404e}} [data-theme="dark"] .software-list::-webkit-scrollbar-track{{background:#1c2831}} [data-theme="dark"] .software-list::-webkit-scrollbar-thumb{{border-color:#1c2831;background:#71808b}} [data-theme="dark"] .summary-tables caption{{background:#344b5a}} [data-theme="dark"] .summary-tables th,[data-theme="dark"] .filter-panel,[data-theme="dark"] .section-heading{{background:var(--surface-muted)}} [data-theme="dark"] .filters label{{color:#b8c3cb}} [data-theme="dark"] th{{background:#2b3a45;color:#d9e1e7}} [data-theme="dark"] tbody tr:nth-child(even){{background:#1b2730}} [data-theme="dark"] tbody tr:hover{{background:#263640}} [data-theme="dark"] .type-chip,[data-theme="dark"] .intel-chip{{color:#c3ced6}} [data-theme="dark"] .cwe-chip,[data-theme="dark"] details summary,[data-theme="dark"] details a,[data-theme="dark"] .cve-id{{color:#8dc1dd}}
+@media(max-width:900px){{main{{padding:18px 12px 40px}} .hero{{align-items:flex-start;flex-direction:column}} .header-side{{width:100%;align-items:stretch;flex-direction:column}} .theme-toggle{{align-self:flex-start}} .risk-card{{width:100%}} .filters,.filters.has-poc-filter{{grid-template-columns:1fr}}}}
+@media(max-width:560px){{.panel-title{{align-items:flex-start;flex-direction:column}} .software-list{{grid-template-columns:minmax(130px,1fr) auto}} .software-cve-count{{display:none}} .summary-tables{{grid-template-columns:1fr;gap:16px}}}}
+@media(prefers-reduced-motion:reduce){{.hero,.software-summary,.summary-panel,.filter-panel{{animation:none}} .theme-toggle,.theme-toggle::before,.theme-toggle::after{{transition:none}}}}
+@media print{{:root,[data-theme="dark"]{{--surface:#fff;--surface-muted:#f2f3f4;--ink:#000;--muted:#444;--line:#aaa;--line-dark:#666;--accent:#315b7d;--header:#fff;--critical:#a61f2b;--high:#a54a16;--medium:#725d14;--low:#24633f;color-scheme:light}} body,[data-theme="dark"] body{{background:#fff;font-size:10pt}} main{{max-width:none;padding:0}} .hero{{padding:0 0 14px;border:0;border-bottom:2px solid #000;background:#fff;color:#000}} .product-name,.subtitle{{color:#333}} .software-summary,.filter-panel,footer{{display:none}} .summary-panel,.report-section{{break-inside:avoid}} button{{display:none}}}}
+</style></head><body><a class="skip-link" href="#findings">Skip to findings</a><main><header class="hero"><div class="brand"><span class="product-name">CVEWatchdog</span><h1>Vulnerability assessment report</h1><p class="subtitle">Version-confirmed findings for the scanned software inventory</p></div><div class="header-side"><button class="theme-toggle" id="theme-toggle" type="button" aria-pressed="false">Dark theme</button><div class="risk-card"><span>Overall risk</span><strong>{html.escape(risk_label)}</strong></div></div></header>
 <section class="panel software-summary"><div class="panel-title"><div><h2>Vulnerable software</h2><p>Select the applications to include in the report.</p></div><div class="actions"><button type="button" id="software-all">Select all</button><button type="button" id="software-none">Select none</button></div></div><div class="software-list">{"".join(software_choices) or "No vulnerable software"}</div></section>
-<div class="cards">{cards}</div>
-<section class="panel filter-panel"><div class="filter-head"><strong>Filter findings</strong><span id="visible-count"></span></div><div class="{filter_class}"><label>Search<input id="report-search" type="search" placeholder="Software, CPE, CVE, CWE, description"></label>
+{summary_tables}
+<section class="panel filter-panel" id="findings"><div class="filter-head"><strong>Filter findings</strong><span id="visible-count"></span></div><div class="{filter_class}"><label>Search<input id="report-search" type="search" placeholder="Software, CPE, CVE, CWE, description"></label>
 <label>Severity<select id="severity-filter"><option value="">All severities</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option><option value="unknown">Unknown</option></select></label>
 <label>Vulnerability type<select id="type-filter"><option value="">All types</option><option value="lpe">LPE</option><option value="rce">RCE</option><option value="privilege-escalation">Privilege escalation</option><option value="dos">DoS</option><option value="information-disclosure">Information disclosure</option><option value="authentication-bypass">Authentication bypass</option><option value="xss">XSS</option><option value="sql-injection">SQL injection</option><option value="path-traversal">Path traversal</option><option value="other">Other</option></select></label>
 <label>CWE<select id="cwe-filter"><option value="">All CWEs</option>{cwe_options}<option value="unknown">Unknown</option></select></label>
 {poc_filter}</div></section>{"".join(sections) or '<section class="empty-state">No version-confirmed vulnerabilities found</section>'}<footer>Generated locally by CVEWatchdog</footer>
 </main><script>
+const themeToggle=document.getElementById('theme-toggle');
+function applyTheme(theme){{document.documentElement.dataset.theme=theme;let dark=theme==='dark';themeToggle.setAttribute('aria-pressed',String(dark));themeToggle.textContent=dark?'Light theme':'Dark theme';}}
+let savedTheme='';try{{savedTheme=localStorage.getItem('cvewatchdog-theme')||'';}}catch(error){{}}applyTheme(savedTheme==='dark'?'dark':'light');
+themeToggle.addEventListener('click',()=>{{let theme=document.documentElement.dataset.theme==='dark'?'light':'dark';applyTheme(theme);try{{localStorage.setItem('cvewatchdog-theme',theme);}}catch(error){{}}}});
 const search=document.getElementById('report-search'), severity=document.getElementById('severity-filter'), type=document.getElementById('type-filter'), cwe=document.getElementById('cwe-filter'), poc=document.getElementById('poc-filter'), count=document.getElementById('visible-count'), software=[...document.querySelectorAll('.software-choice')];
 const reportSections=[...document.querySelectorAll('.report-section')].map(section=>{{let context=(section.querySelector('h2').textContent+' '+section.querySelector('.cpe').textContent).toLowerCase(),rows=[...section.querySelectorAll('tbody tr')];rows.forEach(row=>row.filterText=context+' '+row.textContent.toLowerCase());return{{section,rows}};}});
 function filterReport(){{let visible=0,query=search.value.trim().toLowerCase(),selected=new Set(software.filter(choice=>choice.checked).map(choice=>choice.value));reportSections.forEach(item=>{{let sectionRows=0;item.rows.forEach(row=>{{let show=selected.has(item.section.dataset.software)&&(!query||row.filterText.includes(query))&&(!severity.value||row.dataset.severity===severity.value)&&(!type.value||row.dataset.types.split(' ').includes(type.value))&&(!cwe.value||row.dataset.cwes.split(' ').includes(cwe.value))&&(!poc||!poc.value||row.dataset.poc===poc.value);row.hidden=!show;if(show){{visible++;sectionRows++;}}}});item.section.hidden=sectionRows===0;}});count.textContent=visible+' CVE'+(visible===1?'':'s')+' shown';}}
